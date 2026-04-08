@@ -217,7 +217,7 @@ console.log("create-lab: scaffold CLI for ai-lab monorepo")
 
 ---
 
-### Task 7: 最终验证 + 提交  ⬜
+### Task 7: 最终验证 + 提交  ✅
 
 **Step 1: 全量验证**
 运行:

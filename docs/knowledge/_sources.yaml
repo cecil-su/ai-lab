@@ -1,0 +1,6 @@
+sources:
+  - name: "hn-ai"
+    url: "https://hnrss.org/newest?q=AI&count=5"
+    type: "rss"
+    tags: ["ai", "news"]
+    max_items: 5

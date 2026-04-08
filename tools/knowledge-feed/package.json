@@ -1,0 +1,25 @@
+{
+  "name": "knowledge-feed",
+  "version": "0.0.0",
+  "description": "Automated knowledge feed fetcher for ai-lab",
+  "type": "module",
+  "bin": {
+    "knowledge-feed": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run"
+  },
+  "keywords": ["rss", "feed", "knowledge", "automation"],
+  "license": "MIT",
+  "dependencies": {
+    "feedsmith": "^2.8.0",
+    "yaml": "^2.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.1.0"
+  }
+}
