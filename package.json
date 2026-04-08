@@ -1,0 +1,11 @@
+{
+  "name": "ai-lab",
+  "version": "0.0.0",
+  "private": true,
+  "description": "AI Lab - monorepo for AI experiments and tools",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=24",
+    "pnpm": ">=10"
+  }
+}
