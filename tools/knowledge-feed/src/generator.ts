@@ -50,7 +50,7 @@ export async function generateMarkdown(
   try {
     existing = await readFile(filePath, "utf-8");
   } catch {
-    // File doesn't exist yet
+    // ENOENT expected for new files
   }
 
   if (existing) {

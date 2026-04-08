@@ -7,6 +7,7 @@ import {
   detectJsonFeed,
 } from "feedsmith";
 import type { SourceConfig, FeedItem, Fetcher } from "./types.js";
+import { USER_AGENT, FETCH_TIMEOUT_MS } from "../constants.js";
 
 interface FeedEntry {
   title?: string;
@@ -99,8 +100,8 @@ function parseFeedText(text: string): ParsedFeed {
 
 export const rssFetcher: Fetcher = async (source: SourceConfig): Promise<FeedItem[]> => {
   const response = await fetch(source.url, {
-    signal: AbortSignal.timeout(30_000),
-    headers: { "User-Agent": "knowledge-feed/0.1 (+https://github.com/ai-lab)" },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    headers: { "User-Agent": USER_AGENT },
   });
 
   if (!response.ok) {

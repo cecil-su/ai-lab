@@ -1,4 +1,5 @@
 import type { SourceConfig, FeedItem, Fetcher } from "./types.js";
+import { USER_AGENT, FETCH_TIMEOUT_MS } from "../constants.js";
 
 const JINA_BASE = "https://r.jina.ai/";
 
@@ -13,7 +14,7 @@ export const jinaFetcher: Fetcher = async (source: SourceConfig): Promise<FeedIt
 
   const headers: Record<string, string> = {
     Accept: "text/markdown",
-    "User-Agent": "knowledge-feed/0.1 (+https://github.com/ai-lab)",
+    "User-Agent": USER_AGENT,
   };
 
   if (apiKey) {
@@ -21,7 +22,7 @@ export const jinaFetcher: Fetcher = async (source: SourceConfig): Promise<FeedIt
   }
 
   const response = await fetch(JINA_BASE + source.url, {
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     headers,
   });
 

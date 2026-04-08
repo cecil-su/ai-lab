@@ -47,12 +47,6 @@ async function main(): Promise<void> {
   for (const source of sources) {
     try {
       const fetcher = fetchers[source.type];
-      if (!fetcher) {
-        console.error(`  [${source.name}] Unknown type: ${source.type}`);
-        totalFailed++;
-        continue;
-      }
-
       console.log(`  [${source.name}] Fetching (${source.type})...`);
       const items = await fetcher(source);
       const newItems = deduplicateItems(items, source.name, seen);
