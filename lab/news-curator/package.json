@@ -1,0 +1,25 @@
+{
+  "name": "news-curator",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Fetch web articles as markdown and split long files for translation",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "fetch": "node dist/fetch.js",
+    "split": "node dist/split.js"
+  },
+  "dependencies": {
+    "@mozilla/readability": "^0.5.0",
+    "jsdom": "^26.1.0",
+    "turndown": "^7.2.0",
+    "playwright": "^1.52.0"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^21.1.7",
+    "@types/turndown": "^5.0.5",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.0"
+  }
+}
