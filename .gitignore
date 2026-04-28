@@ -19,6 +19,13 @@ Thumbs.db
 *.swp
 *.swo
 
+# Claude Code (local-only)
+.claude/settings.local.json
+
+# Bloom tutor learning sessions (personal, not for repo)
+skills/bloom-tutor/sessions/*
+!skills/bloom-tutor/sessions/.gitkeep
+
 # Temporary directories (not tracked)
 vendor/
 playground/
