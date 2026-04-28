@@ -1,0 +1,23 @@
+{
+  "name": "dev-flow",
+  "owner": {
+    "name": "shuxingxing"
+  },
+  "metadata": {
+    "description": "个人工作流插件集合",
+    "pluginRoot": "./plugins"
+  },
+  "plugins": [
+    {
+      "name": "spec",
+      "source": "./plugins/spec",
+      "description": "软件开发全流程工作流：头脑风暴 → 编写计划 → 执行计划 → 代码审查 → 多角度分析",
+      "version": "1.0.0",
+      "author": {
+        "name": "shuxingxing"
+      },
+      "category": "development",
+      "tags": ["workflow", "planning", "code-review", "brainstorm"]
+    }
+  ]
+}

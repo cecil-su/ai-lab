@@ -1,0 +1,8 @@
+{
+  "name": "spec",
+  "description": "软件开发全流程工作流：头脑风暴 → 编写计划 → 执行计划 → 代码审查 → 多角度分析",
+  "version": "1.0.0",
+  "author": {
+    "name": "shuxingxing"
+  }
+}
