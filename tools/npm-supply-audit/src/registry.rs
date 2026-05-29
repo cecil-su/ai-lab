@@ -22,6 +22,16 @@ pub struct Maintainer {
 pub struct VersionMeta {
     #[serde(default)]
     pub maintainers: Vec<Maintainer>,
+    #[serde(default)]
+    pub scripts: BTreeMap<String, String>,
+    #[serde(default)]
+    pub dist: Dist,
+}
+
+#[derive(Deserialize, Default)]
+pub struct Dist {
+    #[serde(rename = "unpackedSize", default)]
+    pub unpacked_size: u64,
 }
 
 impl Packument {
@@ -57,6 +67,40 @@ pub fn fetch_packument(client: &reqwest::blocking::Client, name: &str) -> Result
         anyhow::bail!("registry {name}: HTTP {status}");
     }
     resp.json().context("decode packument")
+}
+
+// Fetch many packuments concurrently with a fixed worker pool. Failed fetches
+// come back as `None` so the caller decides how to count them.
+pub fn fetch_packuments_parallel(
+    client: &reqwest::blocking::Client,
+    packages: &[String],
+    concurrency: usize,
+) -> Vec<(String, Option<Packument>)> {
+    if packages.is_empty() {
+        return Vec::new();
+    }
+    let workers = concurrency.max(1);
+    let chunk_size = packages.len().div_ceil(workers).max(1);
+
+    std::thread::scope(|s| {
+        let handles: Vec<_> = packages
+            .chunks(chunk_size)
+            .map(|chunk| {
+                s.spawn(move || {
+                    chunk
+                        .iter()
+                        .map(|pkg| (pkg.clone(), fetch_packument(client, pkg).ok()))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+
+        let mut out = Vec::with_capacity(packages.len());
+        for h in handles {
+            out.extend(h.join().expect("packument worker panicked"));
+        }
+        out
+    })
 }
 
 #[derive(Deserialize)]

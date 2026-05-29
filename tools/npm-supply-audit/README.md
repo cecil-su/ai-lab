@@ -73,6 +73,29 @@ nsa diff --suspicious-publishing --burst-threshold 5
 
 **maintainer 反查**：lockfile 里通常只有同维护者的少数几个包（比如 atool 5-19 那波 314 个里你只装了 3 个），单看 lockfile 凑不够阈值。本工具会对"跨 scope 但还没到阈值"的可疑维护者做反查——通过 npm `search?text=maintainer:<name>` 拉出该账号名下全部包补进时间线，再跑 burst 检测。所以默认阈值 10 也能命中只装了 3 个包的项目。单 scope 维护者（rollup、esbuild 这类 monorepo + 平台二进制）不反查，避免噪声。
 
+### --script-drift — install 脚本引入检测（行为检测）
+
+OSV 查名单、`--suspicious-publishing` 查发布行为，都是在问"**谁**发的、**像不像**已知攻击"。这个 flag 换个角度问：**你锁定的这个版本，是不是跑了上一个版本不跑的安装期代码？**
+
+Shai-Hulud 类 payload 几乎都通过 npm 生命周期钩子（`preinstall` / `install` / `postinstall`）执行——`npm install` 时自动跑任意代码。一个稳定包在非大版本升级里**突然多出**这种钩子，是极强、且不依赖 OSV、能抓零日的信号；正经包几乎不会这么干。本工具对比锁定版本与它**按时间排序的前一个已发布版本**（不是 semver 排序，攻击者乱序发布也躲不掉）。
+
+```bash
+nsa audit . --script-drift
+```
+
+命中示例：
+
+```
+[ALERT] 1 package(s) introduced an install hook vs the prior version:
+        - some-pkg@2.1.4  (prev: 2.1.3)
+          + postinstall: node setup.mjs
+          ! unpacked size 12000 -> 980000 bytes (81x)
+```
+
+`! unpacked size` 是顺带算的二级信号：钩子引入 + tarball 体积暴涨同时出现，基本就是注入了 payload。
+
+**重要边界**：已被 npm 下架的恶意版本（如 AntV 5-19 的 `@antv/adjust@0.3.5`）**查不到**——下架后 registry 不再返回该版本的脚本元数据。所以这个检测专攻**还活着的零日**，跟 OSV（事后名单）和 `--suspicious-publishing`（读 `time` 字段，下架也能查）正好互补。一直带 install 钩子的构建工具（esbuild / node-gyp 类）因为前一版也有钩子，不会误报。
+
 ### explain — 查 OSV 公告详情
 
 ```bash

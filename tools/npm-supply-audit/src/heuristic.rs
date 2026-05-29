@@ -54,7 +54,7 @@ pub fn detect(
         BTreeMap::new();
 
     // Phase 1: pull packuments for every package in the user's lockfile.
-    let fetched = fetch_packuments_parallel(&client, &pkg_list, 8);
+    let fetched = registry::fetch_packuments_parallel(&client, &pkg_list, 8);
     ingest_fetched(&fetched, &mut events_by_maintainer, &mut fetch_failures);
 
     let window = Duration::minutes(window_minutes);
@@ -88,7 +88,7 @@ pub fn detect(
         );
         already_seen.extend(new_pkgs.iter().cloned());
         packages_queried += new_pkgs.len();
-        let extra_fetched = fetch_packuments_parallel(&client, &new_pkgs, 8);
+        let extra_fetched = registry::fetch_packuments_parallel(&client, &new_pkgs, 8);
         ingest_fetched(&extra_fetched, &mut events_by_maintainer, &mut fetch_failures);
     }
 
@@ -126,38 +126,6 @@ pub fn detect(
         hits,
         packages_queried,
         fetch_failures,
-    })
-}
-
-fn fetch_packuments_parallel(
-    client: &reqwest::blocking::Client,
-    packages: &[String],
-    concurrency: usize,
-) -> Vec<(String, Option<registry::Packument>)> {
-    if packages.is_empty() {
-        return Vec::new();
-    }
-    let workers = concurrency.max(1);
-    let chunk_size = packages.len().div_ceil(workers).max(1);
-
-    std::thread::scope(|s| {
-        let handles: Vec<_> = packages
-            .chunks(chunk_size)
-            .map(|chunk| {
-                s.spawn(move || {
-                    chunk
-                        .iter()
-                        .map(|pkg| (pkg.clone(), registry::fetch_packument(client, pkg).ok()))
-                        .collect::<Vec<_>>()
-                })
-            })
-            .collect();
-
-        let mut out = Vec::with_capacity(packages.len());
-        for h in handles {
-            out.extend(h.join().expect("packument worker panicked"));
-        }
-        out
     })
 }
 

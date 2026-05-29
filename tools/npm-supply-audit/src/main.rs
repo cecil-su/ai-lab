@@ -4,6 +4,7 @@ mod heuristic;
 mod lockfile;
 mod osv;
 mod registry;
+mod scriptdrift;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -51,6 +52,11 @@ enum Cmd {
         window_minutes: i64,
         #[arg(long, default_value_t = 10, help = "Min distinct packages per window to flag a burst")]
         burst_threshold: usize,
+        #[arg(
+            long,
+            help = "Flag pinned versions that introduce an install hook (pre/post/install) absent in the prior published version"
+        )]
+        script_drift: bool,
     },
     /// Scan only what changed in the lockfile since a git ref (default HEAD~1).
     /// Suitable for pre-commit hooks and CI PR gates.
@@ -89,6 +95,7 @@ fn main() -> ExitCode {
             suspicious_publishing,
             window_minutes,
             burst_threshold,
+            script_drift,
         } => audit(
             &path,
             json,
@@ -97,6 +104,7 @@ fn main() -> ExitCode {
             suspicious_publishing,
             window_minutes,
             burst_threshold,
+            script_drift,
         ),
         Cmd::Diff {
             git_ref,
@@ -184,6 +192,7 @@ fn audit(
     suspicious_publishing: bool,
     window_minutes: i64,
     burst_threshold: usize,
+    script_drift: bool,
 ) -> Result<bool> {
     let lockfiles = lockfile::find(root)?;
 
@@ -217,13 +226,22 @@ fn audit(
         None
     };
 
+    let drift = if script_drift {
+        let union = union_deps(&projects);
+        eprintln!("[script-drift] checking install hooks for {} package(s)...", union.len());
+        Some(scriptdrift::detect(&union)?)
+    } else {
+        None
+    };
+
     let iocs = forensics::scan_ioc_files(root)?;
     let hooks = forensics::scan_claude_hooks()?;
 
     let has_issues = projects.iter().any(|p| !p.vulns.is_empty())
         || !iocs.is_empty()
         || !hooks.is_empty()
-        || anomaly.as_ref().map(|a| !a.hits.is_empty()).unwrap_or(false);
+        || anomaly.as_ref().map(|a| !a.hits.is_empty()).unwrap_or(false)
+        || drift.as_ref().map(|d| !d.hits.is_empty()).unwrap_or(false);
 
     if json {
         let projects_json: Vec<_> = projects
@@ -243,6 +261,7 @@ fn audit(
             "ioc_files": iocs,
             "suspicious_hooks": hooks,
             "suspicious_publishing": anomaly.as_ref().map(anomaly_to_json),
+            "script_drift": drift.as_ref().map(drift_to_json),
             "has_issues": has_issues,
             "offline": offline,
         });
@@ -251,6 +270,9 @@ fn audit(
         audit_report(&projects, total_unique, &iocs, &hooks, offline);
         if let Some(a) = &anomaly {
             print_anomaly(a);
+        }
+        if let Some(d) = &drift {
+            print_drift(d);
         }
     }
 
@@ -317,6 +339,69 @@ fn anomaly_to_json(result: &heuristic::AnomalyResult) -> serde_json::Value {
                     "window_start": w.window_start.to_rfc3339(),
                     "window_end": w.window_end.to_rfc3339(),
                 })).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "packages_queried": result.packages_queried,
+        "fetch_failures": result.fetch_failures,
+        "hits": hits,
+    })
+}
+
+fn print_drift(result: &scriptdrift::DriftResult) {
+    println!();
+    println!("== Install-script drift ==");
+    println!();
+    println!(
+        "Checked install hooks across {} package(s){}",
+        result.packages_queried,
+        if result.fetch_failures > 0 {
+            format!(" ({} fetch failures)", result.fetch_failures)
+        } else {
+            String::new()
+        }
+    );
+    println!();
+    if result.hits.is_empty() {
+        println!("[OK]    No newly-introduced install hooks");
+        return;
+    }
+    println!(
+        "[ALERT] {} package(s) introduced an install hook vs the prior version:",
+        result.hits.len()
+    );
+    for h in &result.hits {
+        println!("        - {}@{}  (prev: {})", h.package, h.version, h.prev_version);
+        for (hook, body) in &h.introduced {
+            println!("          + {hook}: {body}");
+        }
+        if h.cur_size > 0 && h.prev_size > 0 && h.cur_size >= h.prev_size * 2 {
+            println!(
+                "          ! unpacked size {} -> {} bytes ({}x)",
+                h.prev_size,
+                h.cur_size,
+                h.cur_size / h.prev_size.max(1)
+            );
+        }
+    }
+}
+
+fn drift_to_json(result: &scriptdrift::DriftResult) -> serde_json::Value {
+    let hits: Vec<_> = result
+        .hits
+        .iter()
+        .map(|h| {
+            serde_json::json!({
+                "package": h.package,
+                "version": h.version,
+                "prev_version": h.prev_version,
+                "introduced": h.introduced.iter().map(|(hook, body)| serde_json::json!({
+                    "hook": hook,
+                    "script": body,
+                })).collect::<Vec<_>>(),
+                "prev_unpacked_size": h.prev_size,
+                "cur_unpacked_size": h.cur_size,
             })
         })
         .collect();
