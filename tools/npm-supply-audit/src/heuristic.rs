@@ -97,7 +97,8 @@ pub fn detect(
 
     for (maintainer, mut evs) in events_by_maintainer {
         evs.sort_by_key(|(_, _, t)| *t);
-        for sw in find_burst_windows(&evs, window, threshold, min_prefix_groups) {
+        let windows = find_burst_windows(&evs, window, threshold, min_prefix_groups);
+        for sw in merge_windows(windows, window) {
             let triggered: Vec<_> = sw
                 .raw_events
                 .iter()
@@ -270,6 +271,29 @@ fn find_burst_windows(
     out
 }
 
+// The greedy detector emits non-overlapping windows in time order, fragmenting
+// one logical burst into ≥threshold chunks (atool's 314-package / 22-minute
+// burst comes back as a 16-pkg sub-chunk + a 10-pkg sub-chunk, the latter
+// collapsing to a single instant). Merge windows whose gap is within one window
+// span so the report shows the full footprint instead of an undersized chunk.
+fn merge_windows(windows: Vec<BurstWindow>, gap: Duration) -> Vec<BurstWindow> {
+    let mut out: Vec<BurstWindow> = Vec::new();
+    for w in windows {
+        if let Some(last) = out.last_mut() {
+            if w.start - last.end <= gap {
+                last.end = w.end;
+                last.raw_events.extend(w.raw_events);
+                let unique: BTreeSet<&String> =
+                    last.raw_events.iter().map(|(p, _, _)| p).collect();
+                last.unique_pkg_count = unique.len();
+                continue;
+            }
+        }
+        out.push(w);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -346,6 +370,55 @@ mod tests {
         }
         let windows = find_burst_windows(&events, Duration::minutes(30), 10, 2);
         assert_eq!(windows.len(), 1);
+    }
+
+    #[test]
+    fn merge_windows_combines_adjacent_burst_chunks() {
+        // Simulate the greedy detector fragmenting one burst into two chunks:
+        // chunk A at minutes 0-2, chunk B at minute 17 (gap < 30-min window).
+        let mut a = Vec::new();
+        for i in 0..10 {
+            a.push((format!("a{i}"), "1.0.0".into(), at(i / 5)));
+        }
+        let mut b = Vec::new();
+        for i in 0..6 {
+            b.push((format!("b{i}"), "1.0.0".into(), at(17)));
+        }
+        let w1 = BurstWindow {
+            start: at(0),
+            end: at(2),
+            unique_pkg_count: 10,
+            raw_events: a,
+        };
+        let w2 = BurstWindow {
+            start: at(17),
+            end: at(17),
+            unique_pkg_count: 6,
+            raw_events: b,
+        };
+        let merged = merge_windows(vec![w1, w2], Duration::minutes(30));
+        assert_eq!(merged.len(), 1, "adjacent chunks should merge");
+        assert_eq!(merged[0].unique_pkg_count, 16, "footprint is the union");
+        assert_eq!(merged[0].start, at(0));
+        assert_eq!(merged[0].end, at(17));
+    }
+
+    #[test]
+    fn merge_windows_keeps_distant_bursts_separate() {
+        let w1 = BurstWindow {
+            start: at(0),
+            end: at(2),
+            unique_pkg_count: 10,
+            raw_events: vec![("a".into(), "1.0.0".into(), at(0))],
+        };
+        let w2 = BurstWindow {
+            start: at(120),
+            end: at(122),
+            unique_pkg_count: 10,
+            raw_events: vec![("b".into(), "1.0.0".into(), at(120))],
+        };
+        let merged = merge_windows(vec![w1, w2], Duration::minutes(30));
+        assert_eq!(merged.len(), 2, "bursts >window apart stay separate");
     }
 
     #[test]
