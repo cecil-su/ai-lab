@@ -1,0 +1,32 @@
+[package]
+name = "npm-supply-audit"
+version = "0.1.0"
+edition = "2021"
+description = "Local self-check for Shai-Hulud / Mini Shai-Hulud npm supply-chain compromises"
+readme = "README.md"
+license = "MIT"
+keywords = ["npm", "security", "supply-chain", "shai-hulud", "audit"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "npm-supply-audit"
+path = "src/main.rs"
+
+[[bin]]
+name = "nsa"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["std", "serde"] }
+clap = { version = "4", features = ["derive"] }
+json5 = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yml = "0.0.12"
+walkdir = "2"
+
+[profile.release]
+strip = true
+lto = "thin"
