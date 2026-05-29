@@ -52,7 +52,12 @@ nsa diff
 # 显式指定 base ref
 nsa diff origin/main
 nsa diff HEAD~5 --only-malicious
+
+# PR gate 里检查这次引入的版本是不是加了 install 钩子（见下方 --script-drift）
+nsa diff --script-drift
 ```
+
+`--suspicious-publishing` 和 `--script-drift` 在 `diff` 上同样可用，只作用于这次引入/升级的包——这正是它俩最佳的战场。
 
 比起每次跑全量 audit（7000+ deps、2-3 分钟），diff 通常只扫 5-50 个新引入的包，秒级。
 
@@ -104,6 +109,28 @@ nsa explain GHSA-qcp2-qp9h-qprg
 ```
 
 输出 affected 版本精确列表 + references + 攻击细节，用来确认你的命中是不是真投毒。
+
+## .nsaignore — 抑制已知误报
+
+在扫描路径下放一个 `.nsaignore`，列出你已经核实过、不想每次都看到的命中。对 OSV、`--suspicious-publishing`、`--script-drift` 三种结果都生效。
+
+```
+# 每行一条，# 后是注释
+fs@0.0.1-security        # npm 官方反 typo 占位包，OSV 已知误报
+lodash                   # 裸包名 = 该包所有版本都忽略
+@antv/adjust@0.3.5       # scoped 包 + 版本
+MAL-2026-3849            # 按公告 ID 忽略（MAL- / GHSA- / CVE-）
+```
+
+三种条目：
+
+| 写法 | 含义 |
+|---|---|
+| `pkg` | 该包**所有版本**的命中都忽略 |
+| `pkg@version` | 只忽略这个精确版本 |
+| `MAL-xxxx` / `GHSA-xxx` / `CVE-xxx` | 按公告 ID 忽略（跨所有包） |
+
+被抑制的条数会打到 stderr（`[allowlist] suppressed N ...`），不会静默吞掉。
 
 ## 输出示例
 
@@ -167,7 +194,7 @@ fi
 - `fs@0.0.1-security`：npm 官方反 typo-squatting 占位包，OSV 真把它标了 `MAL-`，属已知误报，可忽略
 - 老版本被新 `MAL-` 公告误标：本工具已通过本地版本匹配过滤（v0.1.0 起）
 
-不确定某条命中真假？用 `nsa explain <ID>` 看公告原文的 affected 列表。
+不确定某条命中真假？用 `nsa explain <ID>` 看公告原文的 affected 列表。核实为误报后，写进 `.nsaignore` 永久抑制（见上）。
 
 ## 限制
 

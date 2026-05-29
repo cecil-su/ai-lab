@@ -1,3 +1,4 @@
+mod allowlist;
 mod diff;
 mod forensics;
 mod heuristic;
@@ -77,6 +78,11 @@ enum Cmd {
         window_minutes: i64,
         #[arg(long, default_value_t = 10)]
         burst_threshold: usize,
+        #[arg(
+            long,
+            help = "Flag introduced versions that add an install hook absent in the prior published version"
+        )]
+        script_drift: bool,
     },
     /// Print the OSV advisory for an ID (e.g. MAL-2026-3849, GHSA-...)
     Explain {
@@ -115,6 +121,7 @@ fn main() -> ExitCode {
             suspicious_publishing,
             window_minutes,
             burst_threshold,
+            script_drift,
         } => diff_cmd(
             &path,
             &git_ref,
@@ -124,6 +131,7 @@ fn main() -> ExitCode {
             suspicious_publishing,
             window_minutes,
             burst_threshold,
+            script_drift,
         ),
         Cmd::Explain { id } => explain(&id).map(|()| false),
     };
@@ -145,6 +153,7 @@ fn enrich_with_osv(
     projects: &mut [ProjectResult],
     offline: bool,
     only_malicious: bool,
+    allow: &allowlist::Allowlist,
 ) -> Result<usize> {
     let mut unique: BTreeSet<(String, String)> = BTreeSet::new();
     for p in projects.iter() {
@@ -169,17 +178,51 @@ fn enrich_with_osv(
             .push(v.clone());
     }
 
+    let mut suppressed = 0usize;
     for p in projects.iter_mut() {
         let mut hits = Vec::new();
         for d in &p.deps {
             if let Some(vs) = vuln_map.get(d) {
-                hits.extend(vs.iter().cloned());
+                for v in vs {
+                    if allow.allows_id(&v.id) || allow.allows_pkg(&v.package, &v.version) {
+                        suppressed += 1;
+                    } else {
+                        hits.push(v.clone());
+                    }
+                }
             }
         }
         p.vulns = hits;
     }
+    if suppressed > 0 {
+        eprintln!("[allowlist] suppressed {suppressed} OSV finding(s) via .nsaignore");
+    }
 
     Ok(total_unique)
+}
+
+fn filter_anomaly(a: &mut heuristic::AnomalyResult, allow: &allowlist::Allowlist) {
+    if allow.is_empty() {
+        return;
+    }
+    let before = a.hits.len();
+    a.hits.retain(|(pkg, ver), _| !allow.allows_pkg(pkg, ver));
+    let removed = before - a.hits.len();
+    if removed > 0 {
+        eprintln!("[allowlist] suppressed {removed} burst finding(s) via .nsaignore");
+    }
+}
+
+fn filter_drift(d: &mut scriptdrift::DriftResult, allow: &allowlist::Allowlist) {
+    if allow.is_empty() {
+        return;
+    }
+    let before = d.hits.len();
+    d.hits.retain(|h| !allow.allows_pkg(&h.package, &h.version));
+    let removed = before - d.hits.len();
+    if removed > 0 {
+        eprintln!("[allowlist] suppressed {removed} script-drift finding(s) via .nsaignore");
+    }
 }
 
 // ---- audit -------------------------------------------------------------------
@@ -194,6 +237,7 @@ fn audit(
     burst_threshold: usize,
     script_drift: bool,
 ) -> Result<bool> {
+    let allow = allowlist::Allowlist::load(root)?;
     let lockfiles = lockfile::find(root)?;
 
     let mut projects: Vec<ProjectResult> = lockfiles
@@ -216,12 +260,14 @@ fn audit(
         })
         .collect();
 
-    let total_unique = enrich_with_osv(&mut projects, offline, only_malicious)?;
+    let total_unique = enrich_with_osv(&mut projects, offline, only_malicious, &allow)?;
 
     let anomaly = if suspicious_publishing {
         let union = union_deps(&projects);
         eprintln!("[heuristic] querying npm registry for {} package(s)...", union.len());
-        Some(heuristic::detect(&union, window_minutes, burst_threshold)?)
+        let mut a = heuristic::detect(&union, window_minutes, burst_threshold)?;
+        filter_anomaly(&mut a, &allow);
+        Some(a)
     } else {
         None
     };
@@ -229,7 +275,9 @@ fn audit(
     let drift = if script_drift {
         let union = union_deps(&projects);
         eprintln!("[script-drift] checking install hooks for {} package(s)...", union.len());
-        Some(scriptdrift::detect(&union)?)
+        let mut d = scriptdrift::detect(&union)?;
+        filter_drift(&mut d, &allow);
+        Some(d)
     } else {
         None
     };
@@ -511,7 +559,9 @@ fn diff_cmd(
     suspicious_publishing: bool,
     window_minutes: i64,
     burst_threshold: usize,
+    script_drift: bool,
 ) -> Result<bool> {
+    let allow = allowlist::Allowlist::load(root)?;
     let changes = diff::collect_changes(root, git_ref)?;
 
     if changes.is_empty() {
@@ -540,18 +590,31 @@ fn diff_cmd(
         })
         .collect();
 
-    let total_introduced = enrich_with_osv(&mut projects, offline, only_malicious)?;
+    let total_introduced = enrich_with_osv(&mut projects, offline, only_malicious, &allow)?;
 
     let anomaly = if suspicious_publishing {
         let union = union_deps(&projects);
         eprintln!("[heuristic] querying npm registry for {} introduced package(s)...", union.len());
-        Some(heuristic::detect(&union, window_minutes, burst_threshold)?)
+        let mut a = heuristic::detect(&union, window_minutes, burst_threshold)?;
+        filter_anomaly(&mut a, &allow);
+        Some(a)
+    } else {
+        None
+    };
+
+    let drift = if script_drift {
+        let union = union_deps(&projects);
+        eprintln!("[script-drift] checking install hooks for {} introduced package(s)...", union.len());
+        let mut d = scriptdrift::detect(&union)?;
+        filter_drift(&mut d, &allow);
+        Some(d)
     } else {
         None
     };
 
     let has_issues = projects.iter().any(|p| !p.vulns.is_empty())
-        || anomaly.as_ref().map(|a| !a.hits.is_empty()).unwrap_or(false);
+        || anomaly.as_ref().map(|a| !a.hits.is_empty()).unwrap_or(false)
+        || drift.as_ref().map(|d| !d.hits.is_empty()).unwrap_or(false);
 
     if json {
         let projects_json: Vec<_> = projects
@@ -569,6 +632,7 @@ fn diff_cmd(
             "lockfile_changes": projects_json,
             "total_introduced": total_introduced,
             "suspicious_publishing": anomaly.as_ref().map(anomaly_to_json),
+            "script_drift": drift.as_ref().map(drift_to_json),
             "has_issues": has_issues,
             "offline": offline,
         });
@@ -577,6 +641,9 @@ fn diff_cmd(
         diff_report(&projects, git_ref, total_introduced, offline);
         if let Some(a) = &anomaly {
             print_anomaly(a);
+        }
+        if let Some(d) = &drift {
+            print_drift(d);
         }
     }
 
