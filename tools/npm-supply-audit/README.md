@@ -187,7 +187,7 @@ fi
 2. **解析依赖**：从每种 lockfile 抽出 `(package, version)` 列表
 3. **批量查 OSV**：`POST /v1/querybatch`，1000 个 / 批
 4. **本地版本精确匹配**：OSV `querybatch` 对 `MAL-*` 公告不按版本过滤，会无脑返回所有版本。本工具拉 `/v1/vulns/{id}` 详情后比对 `affected[].versions`，过滤误报
-5. **取证扫描**：找 IOC 文件（`router_runtime.js` / `setup.mjs` 等）、检查 `~/.claude/settings.json` 的 hooks 配置
+5. **取证扫描**：找 IOC 文件（`router_runtime.js` / `setup.mjs` 等）、检查 `~/.claude/settings.json` 的 hooks 配置、扫仓库文件（**跳过 node_modules**）内容里的已知外泄端点（如 `webhook.site`）——能抓到被改名、文件名清单漏掉的恶意 CI workflow。只读 `.js/.mjs/.yml/.sh/.ps1` 等载荷类文件，不依赖 `node_modules` 是否安装
 
 ## 关于误报
 

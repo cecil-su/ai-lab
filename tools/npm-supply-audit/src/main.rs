@@ -284,10 +284,12 @@ fn audit(
 
     let iocs = forensics::scan_ioc_files(root)?;
     let hooks = forensics::scan_claude_hooks()?;
+    let exfil = forensics::scan_exfil_indicators(root)?;
 
     let has_issues = projects.iter().any(|p| !p.vulns.is_empty())
         || !iocs.is_empty()
         || !hooks.is_empty()
+        || !exfil.is_empty()
         || anomaly.as_ref().map(|a| !a.hits.is_empty()).unwrap_or(false)
         || drift.as_ref().map(|d| !d.hits.is_empty()).unwrap_or(false);
 
@@ -308,6 +310,10 @@ fn audit(
             "total_unique_deps": total_unique,
             "ioc_files": iocs,
             "suspicious_hooks": hooks,
+            "exfil_indicators": exfil.iter().map(|(p, i)| serde_json::json!({
+                "file": p,
+                "indicator": i,
+            })).collect::<Vec<_>>(),
             "suspicious_publishing": anomaly.as_ref().map(anomaly_to_json),
             "script_drift": drift.as_ref().map(drift_to_json),
             "has_issues": has_issues,
@@ -315,7 +321,7 @@ fn audit(
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        audit_report(&projects, total_unique, &iocs, &hooks, offline);
+        audit_report(&projects, total_unique, &iocs, &hooks, &exfil, offline);
         if let Some(a) = &anomaly {
             print_anomaly(a);
         }
@@ -465,6 +471,7 @@ fn audit_report(
     total_unique: usize,
     iocs: &[PathBuf],
     hooks: &[String],
+    exfil: &[(PathBuf, String)],
     offline: bool,
 ) {
     println!("== npm-supply-audit report ==");
@@ -544,6 +551,15 @@ fn audit_report(
         println!("[ALERT] Suspicious entries in Claude Code config:");
         for h in hooks {
             println!("        - {h}");
+        }
+    }
+    println!();
+    if exfil.is_empty() {
+        println!("[OK]    No known exfil endpoints in repo files");
+    } else {
+        println!("[ALERT] {} file(s) reference a known exfil endpoint:", exfil.len());
+        for (path, ind) in exfil {
+            println!("        - {}  ({ind})", path.display());
         }
     }
 }
