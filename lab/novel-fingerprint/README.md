@@ -32,10 +32,15 @@ node fingerprint.mjs <ch1.txt> <ch2.txt> ... [--names names.txt] [--ends 120] [-
 
 定位是**烟雾报警器，不是法官**：surface 候选，由人/⑤审计决定是否真要改写。
 
-## 验证
+## 验证 / 开箱即跑
 
-开发时拿"劣化测试"的连续 3 章跑过：报 WARN，信号二b surface 出 `慢慢来` 章末口头禅、
-信号一 surface 出 `不划算/来历不明` 措辞 tic——自动复现了手工发现的漂移。
+`fixtures/` 附了 3 章**合成**示例（原创、无版权，故意埋了两个 tic：通篇 `不动声色`、章末 `压不下去`）。直接跑：
 
-> 那几章是带版权的小说正文，**未随仓库提交**。自测时把你自己的连续章节放进 `fixtures/`
-> （末尾趋同 + 高频词的章节应触发 WARN），并用 `--names` 喂你的专名表（格式见 `fixtures/names.txt`）。
+```bash
+node fingerprint.mjs fixtures/ch1.txt fixtures/ch2.txt fixtures/ch3.txt --names fixtures/names.txt
+```
+
+预期：**退出码 2（WARN）**，信号一 surface 出 `不动声色 / 压不下去`，信号二b surface 出章末 `压不下去`——复现"高频词堆积 + 章末口头禅"漂移。这也是脚本的**回归锚**：改完代码跑一遍，WARN 与这两个 tic 不变就没回归。
+（输出里 `借着 / 个字` 等是真实的高召回噪声，正是"烟雾报警器"该有的样子——见上表"诚实边界"。）
+
+> 当初开发是拿"劣化测试"的连续 3 章**真实正文**跑的，信号二b 抓出 `慢慢来`、信号一抓出 `不划算/来历不明`。那几章带版权、**未随仓库提交**，上面的合成 fixture 是等价替身。实战时换成你自己的连续章节即可（用 `--names` 喂你的专名表，格式见 `fixtures/names.txt`）。
