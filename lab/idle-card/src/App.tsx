@@ -1,8 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Battle } from './Battle'
 import { POOL, rollHero, toUnit, enemyTeam, type Hero } from './heroes'
 import type { Team, UnitInit } from './battle/types'
 import { portraitUri, RARITY_LABEL } from './portrait'
+import { idleGain, idleRate } from './economy'
+import { loadSave, writeSave, clearSave, rehydrateOwned } from './storage'
 
 const GACHA_COST = 100
 const WIN_REWARD = 50
@@ -32,15 +34,47 @@ function HeroCard({ hero, selected, badge, onClick }: {
 }
 
 export default function App() {
+  const [save] = useState(loadSave) // 仅读一次
   const [tab, setTab] = useState<Tab>('gacha')
-  const [owned, setOwned] = useState<Hero[]>([POOL[0], POOL[2]]) // 起手送 关羽 + 张飞
-  const [teamIdx, setTeamIdx] = useState<number[]>([0, 1])
-  const [diamonds, setDiamonds] = useState(600)
-  const [stage, setStage] = useState(1)
+  const [owned, setOwned] = useState<Hero[]>(() => (save ? rehydrateOwned(save.ownedIds) : [POOL[0], POOL[2]])) // 起手送 关羽 + 张飞
+  const [teamIdx, setTeamIdx] = useState<number[]>(() => save?.teamIdx ?? [0, 1])
+  const [diamonds, setDiamonds] = useState(() => save?.diamonds ?? 600)
+  const [stage, setStage] = useState(() => save?.stage ?? 1)
+  const [lastTs, setLastTs] = useState(() => save?.lastTs ?? Date.now())
+  const [now, setNow] = useState(() => Date.now())
   const [revealed, setRevealed] = useState<Hero | null>(null)
   const [inBattle, setInBattle] = useState(false)
   const [battleNo, setBattleNo] = useState(0)
   const [msg, setMsg] = useState('')
+
+  // 存档:任一关键状态变化即写入
+  useEffect(() => {
+    writeSave({ ownedIds: owned.map((h) => h.id), teamIdx, diamonds, stage, lastTs })
+  }, [owned, teamIdx, diamonds, stage, lastTs])
+
+  // 挂机:每秒刷新当前时间,据此结算待领钻石
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [])
+  const pending = idleGain(now - lastTs, stage)
+
+  const collectIdle = () => {
+    if (pending <= 0) return
+    setDiamonds((d) => d + pending)
+    setLastTs(Date.now())
+  }
+
+  const resetSave = () => {
+    clearSave()
+    setOwned([POOL[0], POOL[2]])
+    setTeamIdx([0, 1])
+    setDiamonds(600)
+    setStage(1)
+    setLastTs(Date.now())
+    setRevealed(null)
+    setMsg('存档已重置')
+  }
 
   const draw = () => {
     if (diamonds < GACHA_COST) { setMsg('💎 不足'); return }
@@ -90,6 +124,11 @@ export default function App() {
         <span>💎 {diamonds}</span>
         <span>关卡 {stage}</span>
         <span>队伍 {teamIdx.length}/{TEAM_MAX}</span>
+      </div>
+
+      <div className="idle-bar">
+        <span>挂机收益 <b>+{pending}💎</b> <small>({Math.round(idleRate(stage) * 60)} 💎/分 · 第{stage}关)</small></span>
+        <button className="idle-btn" onClick={collectIdle} disabled={pending <= 0}>领取</button>
       </div>
 
       <div className="tabs">
@@ -145,6 +184,8 @@ export default function App() {
           <button className="fight-btn" onClick={startBattle} disabled={!teamIdx.length}>⚔ 挑战</button>
         </div>
       )}
+
+      <button className="reset-link" onClick={resetSave}>重置存档</button>
     </div>
   )
 }

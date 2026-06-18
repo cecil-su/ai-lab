@@ -199,6 +199,28 @@ h1 {
   display: flex; justify-content: center; gap: 22px;
   margin: 6px 0 16px; font-size: 15px; font-weight: 700; color: #ffd98a;
 }
+/* 挂机收益条 */
+.idle-bar {
+  display: flex; align-items: center; justify-content: center; gap: 14px;
+  max-width: 420px; margin: 0 auto 16px; padding: 8px 16px;
+  background: linear-gradient(180deg, rgba(91, 139, 255, 0.16), rgba(91, 139, 255, 0.06));
+  border: 1px solid #3a4f8a; border-radius: 10px; font-size: 14px; color: #cfe0ff;
+}
+.idle-bar b { color: #7fd3ff; }
+.idle-bar small { color: #8f9bc0; }
+.idle-btn {
+  padding: 5px 16px; font-size: 13px; font-weight: 800; color: #06243a;
+  border: none; border-radius: 16px; cursor: pointer;
+  background: linear-gradient(180deg, #9fe6ff, #4fb6e8);
+}
+.idle-btn:disabled { filter: grayscale(0.5) brightness(0.8); cursor: default; }
+
+.reset-link {
+  display: block; margin: 28px auto 0; padding: 4px 10px;
+  font-size: 12px; color: #6b6486; background: none; border: none;
+  cursor: pointer; text-decoration: underline;
+}
+
 .tabs { display: flex; justify-content: center; gap: 8px; margin-bottom: 16px; }
 .tab {
   padding: 8px 22px; font-size: 15px; font-weight: 700; cursor: pointer;
