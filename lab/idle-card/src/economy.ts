@@ -28,3 +28,8 @@ export function growthMul(level: number): number {
 export function upgradeCost(level: number): number {
   return UPGRADE_BASE_COST * level
 }
+
+/** 通关奖励钻石:随关卡递增,推得越深赚得越多 */
+export function winReward(stage: number): number {
+  return 30 + stage * 10
+}

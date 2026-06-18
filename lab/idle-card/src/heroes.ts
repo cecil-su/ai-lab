@@ -68,20 +68,28 @@ export function toUnit(hero: Hero, team: Team, idx: number, level = 1): UnitInit
   }
 }
 
-// 关卡敌人:随关数轮换阵容并整体提升属性
+// 关卡敌人:难度只由平滑缩放决定(统一基础模板 × 倍率),
+// 轮换的武将仅提供名字/立绘/品质等"皮",不影响数值 → 曲线平滑可控
+const ENEMY_BASE = { maxHp: 950, atk: 135, def: 45, speed: 95 }
+const ENEMY_GROWTH = 0.1 // 每关 +10%
+const ENEMY_FLAVOR = [POOL[1], POOL[3], POOL[4]] // 吕布 / 貂蝉 / 赵云(仅做皮)
+
 export function enemyTeam(stage: number): UnitInit[] {
-  const mult = 1 + 0.18 * (stage - 1)
-  const roster = [POOL[1], POOL[3], POOL[4]] // 吕布 / 貂蝉 / 赵云
-  const count = Math.min(3, 2 + Math.floor(stage / 4))
+  const mult = 1 + ENEMY_GROWTH * (stage - 1)
+  const count = stage < 4 ? 2 : 3
   return Array.from({ length: count }, (_, i) => {
-    const h = roster[(stage + i) % roster.length]
+    const flavor = ENEMY_FLAVOR[(stage + i) % ENEMY_FLAVOR.length]
     return {
-      ...h,
       id: `B${i + 1}`,
       team: 'B' as Team,
-      maxHp: Math.round(h.maxHp * mult),
-      atk: Math.round(h.atk * mult),
-      def: Math.round(h.def * mult),
+      name: flavor.name,
+      emoji: flavor.emoji,
+      rarity: flavor.rarity,
+      skill: flavor.skill,
+      speed: ENEMY_BASE.speed,
+      maxHp: Math.round(ENEMY_BASE.maxHp * mult),
+      atk: Math.round(ENEMY_BASE.atk * mult),
+      def: Math.round(ENEMY_BASE.def * mult),
     }
   })
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { idleGain, idleRate, IDLE_CAP_HOURS, growthMul, upgradeCost } from './economy'
+import { idleGain, idleRate, IDLE_CAP_HOURS, growthMul, upgradeCost, winReward } from './economy'
 
 describe('挂机经济 idleGain', () => {
   it('产率随关卡线性提升', () => {
@@ -34,5 +34,10 @@ describe('养成 growthMul / upgradeCost', () => {
   it('升级花费随当前等级递增', () => {
     expect(upgradeCost(1)).toBe(50)
     expect(upgradeCost(3)).toBe(150)
+  })
+
+  it('通关奖励随关卡递增', () => {
+    expect(winReward(1)).toBe(40)
+    expect(winReward(5)).toBe(80)
   })
 })

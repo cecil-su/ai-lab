@@ -3,11 +3,10 @@ import { Battle } from './Battle'
 import { POOL, rollHero, toUnit, enemyTeam, getHero, type Hero, type OwnedHero } from './heroes'
 import type { Team, UnitInit } from './battle/types'
 import { portraitUri, RARITY_LABEL } from './portrait'
-import { idleGain, idleRate, upgradeCost } from './economy'
+import { idleGain, idleRate, upgradeCost, winReward } from './economy'
 import { loadSave, writeSave, clearSave, sanitizeOwned } from './storage'
 
 const GACHA_COST = 100
-const WIN_REWARD = 50
 const TEAM_MAX = 3
 const DEFAULT_OWNED: OwnedHero[] = [
   { heroId: 'guanyu', level: 1 },
@@ -123,9 +122,10 @@ export default function App() {
 
   const onFinish = (winner: Team) => {
     if (winner === 'A') {
-      setMsg(`第 ${stage} 关通关!+${WIN_REWARD}💎`)
+      const reward = winReward(stage)
+      setMsg(`第 ${stage} 关通关!+${reward}💎`)
       setStage((s) => s + 1)
-      setDiamonds((d) => d + WIN_REWARD)
+      setDiamonds((d) => d + reward)
     } else {
       setMsg(`第 ${stage} 关失败,去升级或抽卡再来`)
     }
