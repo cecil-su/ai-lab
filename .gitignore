@@ -30,6 +30,9 @@ skills/bloom-tutor/sessions/*
 vendor/
 playground/
 
+# Playwright MCP session artifacts (screenshots / console logs)
+.playwright-mcp/
+
 # Lab common ignores
 *.bin
 *.onnx
