@@ -2,7 +2,7 @@
 
 > 放置卡牌(咸鱼之王同类)的纯 Web 实现。
 > 立项缘起见 `research-wechat-minigame-2026-06-18.md`。
-> 状态:**实验性原型(垂直切片已验证),待在 `lab/`,未毕业。**
+> 状态:**MVP 达标,已从 `lab/` 毕业到 `apps/idle-card`。**
 
 ---
 
@@ -15,7 +15,7 @@
 ```
 概念验证/垂直切片
       │
-   MVP(能放着玩)   ←【现在在这】系统齐了(存档/挂机/养成),差数值平衡打磨
+   MVP(能放着玩)   ←【现在在这】系统齐全 + 难度曲线已平衡,已毕业到 apps/
       │
   可上线产品        ← 远
 ```
@@ -95,7 +95,13 @@
 
 测试合计 **14/14**(engine 5 + economy 7 + balance 2)。
 
-> **MVP 达标:** 会卡关、升级/抽卡后能推过、推进有正反馈。可考虑从 `lab/` 毕业到 `apps/`。
+> **MVP 达标:** 会卡关、升级/抽卡后能推过、推进有正反馈。
+
+### 2026-06-18 · 毕业到 apps/
+
+MVP 达标后从 `lab/idle-card` 迁到 `apps/idle-card`(`git mv` 保留历史),`pnpm-workspace.yaml` 增加 `apps/*`。
+保留 `"private": true`:这是 app(不发布到 npm),private 是对的;仓库约定里"去掉 private"针对的是要发布的 tools/库,此处不适用。
+迁移后 `pnpm install` + 14/14 测试通过 + 浏览器冒烟正常。
 
 ---
 
@@ -105,25 +111,10 @@
 
 1. **真美术** — SVG 占位 → AI 立绘;手写 Lottie → LottieFiles 免费特效。性价比最高的"看起来像真游戏"那一跳。
 2. **可选增强** — 装备、技能多样化、章节 BOSS、新手引导、挂机产率/经济再调优。
-3. **毕业** — `mv lab/idle-card apps/idle-card` + 去掉 `"private": true`(随时可做)。
-
-### 再往后
-
-4. **数值平衡** — 关卡难度曲线现在是粗拍的,需要成长曲线/品质倍率/关卡难度调参。
-5. **真美术** — SVG 占位 → AI 立绘;手写 Lottie → LottieFiles 免费特效。
-6. **更多系统** — 装备、技能多样化、PVE 章节、新手引导。
 
 ### 砍掉(一期不做)
 
 联网/账号/排行榜/PVP、运营后台、内购支付。
-
----
-
-## 毕业条件(从 `lab/` 移到 `apps/`)
-
-按仓库约定,毕业 = `mv lab/idle-card apps/idle-card` + 去掉 `package.json` 的 `"private": true`。
-
-触发条件:**存档 + 挂机 + 养成都补上,能连续玩 20 分钟有正反馈(到 MVP)。** 现在远没到,留在 `lab/` 是对的。
 
 ---
 
@@ -138,7 +129,7 @@ pnpm -F idle-card build   # 类型检查 + 打包
 ## 文件结构
 
 ```
-lab/idle-card/
+apps/idle-card/
 ├─ docs/
 │  ├─ research-wechat-minigame-2026-06-18.md  调研笔记(立项缘起 + 全部链接 + 思路链)
 │  └─ roadmap.md                              本文件

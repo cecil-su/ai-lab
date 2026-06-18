@@ -8,7 +8,7 @@ importers:
 
   .: {}
 
-  lab/idle-card:
+  apps/idle-card:
     dependencies:
       lottie-web:
         specifier: ^5.12.2

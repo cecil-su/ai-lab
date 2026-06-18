@@ -95,7 +95,7 @@ docs/        - Design docs and plans
 
 ## Workspace
 
-- pnpm workspace covers: `tools/*`, `lab/*` (expand as needed)
+- pnpm workspace covers: `apps/*`, `tools/*`, `lab/*` (expand as needed)
 - `skills/` is NOT in workspace
 - `lab/*` projects must have `"private": true`
 
