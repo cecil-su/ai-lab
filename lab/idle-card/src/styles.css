@@ -1,0 +1,273 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  background: radial-gradient(circle at 50% 0%, #2a2150 0%, #14101f 60%, #0c0a14 100%);
+  color: #e8e2d0;
+  min-height: 100vh;
+}
+
+.app {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 24px 16px 48px;
+  text-align: center;
+}
+
+h1 {
+  font-size: 26px;
+  /* 金色描边渐变字:游戏"氪金感"核心招式 */
+  background: linear-gradient(180deg, #fff3c4, #f0b443);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  text-shadow: 0 2px 6px rgba(240, 180, 67, 0.35);
+}
+.sub { font-size: 13px; color: #9b93b5; margin: 8px 0 20px; }
+
+/* ===== 战斗场 ===== */
+.arena {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 28px 18px;
+  border: 2px solid #4a3f7a;
+  border-radius: 16px;
+  background: linear-gradient(160deg, rgba(60, 48, 110, 0.5), rgba(20, 16, 35, 0.6));
+  box-shadow: inset 0 0 40px rgba(120, 90, 220, 0.18), 0 10px 30px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+}
+.arena.shaking { animation: shake 0.36s ease; }
+
+.team { display: flex; gap: 18px; }
+.team-B { transform: scaleX(-1); }      /* 整列镜像,让 B 面朝我方 */
+.team-B .name, .team-B .hptext, .team-B .float, .team-B .portrait { transform: scaleX(-1); } /* 文字/立绘翻回来 */
+
+.vs {
+  font-size: 18px; font-weight: 800; color: #ff6b9d;
+  text-shadow: 0 0 12px rgba(255, 107, 157, 0.6);
+}
+
+/* ===== 单位 ===== */
+.unit { position: relative; width: 88px; }
+.avatar {
+  position: relative;
+  width: 72px; height: 72px; margin: 0 auto;
+  border-radius: 14px;
+  border: 2px solid #ffcf5c;
+}
+.portrait {
+  display: block; width: 100%; height: 100%;
+  border-radius: 12px; object-fit: cover;
+}
+.emoji { font-size: 40px; line-height: 1; }
+
+/* 品质边框:一眼分高低 */
+.avatar.rarity-R { border-color: #5b8bff; box-shadow: 0 0 12px rgba(91, 139, 255, 0.45); }
+.avatar.rarity-SR { border-color: #c08bff; box-shadow: 0 0 14px rgba(192, 139, 255, 0.5); }
+.avatar.rarity-SSR { border-color: #ffcf5c; box-shadow: 0 0 16px rgba(255, 207, 92, 0.6); }
+
+.name { margin-top: 8px; font-size: 14px; font-weight: 700; }
+.hpbar {
+  margin: 5px auto 0; width: 76px; height: 9px;
+  background: #1c1730; border-radius: 5px; overflow: hidden;
+  border: 1px solid #000;
+}
+.hpfill {
+  display: block; height: 100%;
+  background: linear-gradient(90deg, #ff5b5b, #ffb15b);
+  transition: width 0.25s ease;
+}
+.hptext { font-size: 11px; color: #b7afce; margin-top: 3px; }
+
+.unit.dead .avatar {
+  filter: grayscale(1) brightness(0.45);
+  opacity: 0.35;
+  transform: translateY(8px) rotate(-8deg);
+  transition: all 0.3s ease;
+}
+
+/* ===== 动作动画 ===== */
+.avatar.dash-r { animation: dashR 0.16s ease; }
+.avatar.dash-l { animation: dashL 0.16s ease; }
+.avatar.hit { animation: hitFlash 0.22s ease; }
+.avatar.cast { animation: castPulse 0.5s ease; }
+
+@keyframes dashR { 50% { transform: translateX(34px); } }
+@keyframes dashL { 50% { transform: translateX(-34px); } }
+@keyframes hitFlash {
+  0% { filter: brightness(3) saturate(0); transform: translateX(4px); }
+  100% { filter: none; transform: none; }
+}
+@keyframes castPulse {
+  0% { transform: scale(1); filter: drop-shadow(0 0 0 gold); }
+  50% { transform: scale(1.28); filter: drop-shadow(0 0 18px #ffe07a); }
+  100% { transform: scale(1); }
+}
+@keyframes shake {
+  0%, 100% { transform: translate(0, 0); }
+  20% { transform: translate(-6px, 3px); }
+  40% { transform: translate(5px, -4px); }
+  60% { transform: translate(-4px, -2px); }
+  80% { transform: translate(4px, 3px); }
+}
+
+/* ===== 飘字 ===== */
+.floats {
+  position: absolute; top: -6px; left: 50%;
+  width: 0; z-index: 5; pointer-events: none;
+}
+.float {
+  position: absolute; left: 0; top: 0;
+  transform: translateX(-50%);
+  font-size: 20px; font-weight: 800; color: #ff7a7a;
+  text-shadow: 0 2px 3px rgba(0, 0, 0, 0.8);
+  animation: floatUp 0.8s ease forwards;
+  white-space: nowrap;
+}
+.float.crit {
+  font-size: 30px; color: #ffd34d;
+  text-shadow: 0 0 10px rgba(255, 211, 77, 0.9), 0 2px 4px #000;
+}
+@keyframes floatUp {
+  0% { transform: translate(-50%, 0); opacity: 1; }
+  100% { transform: translate(-50%, -48px); opacity: 0; }
+}
+
+/* ===== 技能特效(纯 CSS,零素材;以后可换成 Lottie / 序列帧)===== */
+.vfx { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
+.vfx-slash {
+  position: absolute; top: 50%; left: 50%;
+  width: 96px; height: 14px; border-radius: 8px;
+  background: linear-gradient(90deg, transparent, #fff, #ffd34d, transparent);
+  filter: drop-shadow(0 0 8px #ffd34d);
+  animation: slashSpin 0.5s ease forwards;
+}
+.vfx-ring {
+  position: absolute; top: 50%; left: 50%;
+  width: 70px; height: 70px; border: 3px solid #ffcf5c; border-radius: 50%;
+  animation: ring 0.5s ease forwards;
+}
+@keyframes slashSpin {
+  0% { transform: translate(-50%, -50%) rotate(-45deg) scale(0.3); opacity: 0; }
+  30% { opacity: 1; }
+  100% { transform: translate(-50%, -50%) rotate(15deg) scale(1.5); opacity: 0; }
+}
+@keyframes ring {
+  0% { transform: translate(-50%, -50%) scale(0.2); opacity: 0.9; }
+  100% { transform: translate(-50%, -50%) scale(2.2); opacity: 0; }
+}
+/* Lottie 技能爆裂(中档特效):覆盖在目标身上 */
+.lottie-burst {
+  position: absolute; top: 50%; left: 50%;
+  width: 130px; height: 130px;
+  transform: translate(-50%, -50%);
+}
+
+/* ===== 结算 / 按钮 / 日志 ===== */
+.result {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 34px; font-weight: 900; color: #ffd34d;
+  background: rgba(12, 10, 20, 0.55);
+  text-shadow: 0 0 20px rgba(255, 211, 77, 0.8);
+  animation: floatUp 0.4s ease reverse;
+}
+.fight-btn {
+  margin: 22px auto 0; padding: 12px 40px;
+  font-size: 18px; font-weight: 800; color: #3a2400;
+  border: none; border-radius: 30px; cursor: pointer;
+  background: linear-gradient(180deg, #ffe07a, #f0a93c);
+  box-shadow: 0 6px 0 #b87a1e, 0 8px 16px rgba(0, 0, 0, 0.4);
+  transition: transform 0.08s;
+}
+.fight-btn:active { transform: translateY(4px); box-shadow: 0 2px 0 #b87a1e; }
+.fight-btn:disabled { filter: grayscale(0.4) brightness(0.85); cursor: default; }
+
+.log {
+  margin: 22px auto 0; max-width: 460px; max-height: 200px; overflow-y: auto;
+  text-align: left; font-size: 13px; line-height: 1.7;
+  background: rgba(0, 0, 0, 0.3); border-radius: 10px; padding: 10px 16px;
+  color: #b7afce; font-family: 'Cascadia Code', Consolas, monospace;
+}
+.log-line { white-space: pre; }
+
+/* ===== 游戏外壳:顶栏 / 页签 / 面板 ===== */
+.topbar {
+  display: flex; justify-content: center; gap: 22px;
+  margin: 6px 0 16px; font-size: 15px; font-weight: 700; color: #ffd98a;
+}
+.tabs { display: flex; justify-content: center; gap: 8px; margin-bottom: 16px; }
+.tab {
+  padding: 8px 22px; font-size: 15px; font-weight: 700; cursor: pointer;
+  color: #b7afce; background: rgba(255, 255, 255, 0.06);
+  border: 1px solid #4a3f7a; border-radius: 20px; transition: all 0.15s;
+}
+.tab.active {
+  color: #3a2400; border-color: transparent;
+  background: linear-gradient(180deg, #ffe07a, #f0a93c);
+}
+.msg {
+  margin: 0 auto 14px; max-width: 420px; padding: 8px 14px;
+  font-size: 14px; color: #ffe7a8;
+  background: rgba(240, 169, 60, 0.12); border: 1px solid #6b561f; border-radius: 8px;
+}
+.panel { min-height: 240px; }
+.hint { font-size: 13px; color: #9b93b5; margin: 14px 0; }
+
+/* ===== 英雄卡 ===== */
+.card-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, 100px);
+  gap: 12px; justify-content: center; margin-top: 8px;
+}
+.hero-card {
+  position: relative; width: 100px; padding: 8px 6px 10px;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  background: linear-gradient(160deg, rgba(70, 56, 130, 0.5), rgba(20, 16, 35, 0.6));
+  border: 2px solid #5b8bff; border-radius: 12px; cursor: pointer;
+  transition: transform 0.1s;
+}
+.hero-card:not(:disabled):hover { transform: translateY(-3px); }
+.hero-card.rarity-SR { border-color: #c08bff; }
+.hero-card.rarity-SSR { border-color: #ffcf5c; box-shadow: 0 0 14px rgba(255, 207, 92, 0.4); }
+.hero-card.selected { outline: 3px solid #6bff9d; outline-offset: 1px; }
+.hc-portrait { width: 72px; height: 72px; border-radius: 10px; }
+.hc-rarity {
+  position: absolute; top: 6px; left: 6px; font-size: 11px; font-weight: 800;
+  padding: 1px 6px; border-radius: 6px; color: #fff;
+}
+.hc-rarity.r-R { background: #3b6fd4; }
+.hc-rarity.r-SR { background: #8b48d0; }
+.hc-rarity.r-SSR { background: #d99422; color: #2a1a00; }
+.hc-name { font-size: 14px; font-weight: 700; color: #f0eada; }
+.hc-skill { font-size: 11px; color: #9b93b5; }
+.hc-badge {
+  position: absolute; top: -8px; right: -8px;
+  width: 22px; height: 22px; line-height: 22px;
+  font-size: 13px; font-weight: 800; color: #06351a;
+  background: #6bff9d; border-radius: 50%;
+}
+
+/* 抽卡揭示 */
+.reveal {
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  margin-top: 22px; animation: revealIn 0.4s ease;
+}
+.reveal-text { font-size: 16px; font-weight: 800; color: #ffd34d; }
+@keyframes revealIn {
+  0% { transform: scale(0.4) rotateY(90deg); opacity: 0; }
+  100% { transform: scale(1) rotateY(0); opacity: 1; }
+}
+
+/* 推图 */
+.stage-info { font-size: 22px; font-weight: 800; color: #ffd98a; margin: 10px 0 4px; }
+.enemy-preview { display: flex; justify-content: center; gap: 10px; margin: 14px 0 22px; }
+.enemy-mini { width: 56px; height: 56px; border-radius: 10px; border: 2px solid #b85b5b; }
+
+.back-btn {
+  margin-top: 16px; padding: 8px 28px; font-size: 15px; font-weight: 800;
+  color: #3a2400; border: none; border-radius: 22px; cursor: pointer;
+  background: linear-gradient(180deg, #ffe07a, #f0a93c);
+}

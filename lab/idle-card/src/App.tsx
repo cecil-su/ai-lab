@@ -1,0 +1,150 @@
+import { useState } from 'react'
+import { Battle } from './Battle'
+import { POOL, rollHero, toUnit, enemyTeam, type Hero } from './heroes'
+import type { Team, UnitInit } from './battle/types'
+import { portraitUri, RARITY_LABEL } from './portrait'
+
+const GACHA_COST = 100
+const WIN_REWARD = 50
+const TEAM_MAX = 3
+
+type Tab = 'gacha' | 'team' | 'stage'
+
+function HeroCard({ hero, selected, badge, onClick }: {
+  hero: Hero
+  selected?: boolean
+  badge?: string
+  onClick?: () => void
+}) {
+  return (
+    <button
+      className={`hero-card rarity-${hero.rarity}${selected ? ' selected' : ''}`}
+      onClick={onClick}
+      disabled={!onClick}
+    >
+      <img className="hc-portrait" src={portraitUri(hero.name[0], hero.rarity)} alt={hero.name} />
+      <span className={`hc-rarity r-${hero.rarity}`}>{RARITY_LABEL[hero.rarity]}</span>
+      <span className="hc-name">{hero.name}</span>
+      <span className="hc-skill">{hero.skill}</span>
+      {badge && <span className="hc-badge">{badge}</span>}
+    </button>
+  )
+}
+
+export default function App() {
+  const [tab, setTab] = useState<Tab>('gacha')
+  const [owned, setOwned] = useState<Hero[]>([POOL[0], POOL[2]]) // 起手送 关羽 + 张飞
+  const [teamIdx, setTeamIdx] = useState<number[]>([0, 1])
+  const [diamonds, setDiamonds] = useState(600)
+  const [stage, setStage] = useState(1)
+  const [revealed, setRevealed] = useState<Hero | null>(null)
+  const [inBattle, setInBattle] = useState(false)
+  const [battleNo, setBattleNo] = useState(0)
+  const [msg, setMsg] = useState('')
+
+  const draw = () => {
+    if (diamonds < GACHA_COST) { setMsg('💎 不足'); return }
+    const hero = rollHero()
+    setDiamonds((d) => d - GACHA_COST)
+    setOwned((o) => [...o, hero])
+    setRevealed(hero)
+  }
+
+  const toggleTeam = (idx: number) => {
+    setTeamIdx((t) => {
+      if (t.includes(idx)) return t.filter((x) => x !== idx)
+      if (t.length >= TEAM_MAX) return t
+      return [...t, idx]
+    })
+  }
+
+  const startBattle = () => {
+    if (!teamIdx.length) { setMsg('请先去「编队」上阵武将'); return }
+    setMsg('')
+    setBattleNo((n) => n + 1)
+    setInBattle(true)
+  }
+
+  const onFinish = (winner: Team) => {
+    if (winner === 'A') {
+      setMsg(`第 ${stage} 关通关!+${WIN_REWARD}💎`)
+      setStage((s) => s + 1)
+      setDiamonds((d) => d + WIN_REWARD)
+    } else {
+      setMsg(`第 ${stage} 关失败,练度不够,抽几张再来`)
+    }
+    setInBattle(false)
+  }
+
+  if (inBattle) {
+    const playerUnits = teamIdx.map((oi, i) => toUnit(owned[oi], 'A', i))
+    const units: UnitInit[] = [...playerUnits, ...enemyTeam(stage)]
+    return <Battle key={battleNo} units={units} onFinish={onFinish} />
+  }
+
+  return (
+    <div className="app">
+      <h1>放置卡牌 · MVP</h1>
+
+      <div className="topbar">
+        <span>💎 {diamonds}</span>
+        <span>关卡 {stage}</span>
+        <span>队伍 {teamIdx.length}/{TEAM_MAX}</span>
+      </div>
+
+      <div className="tabs">
+        {(['gacha', 'team', 'stage'] as Tab[]).map((t) => (
+          <button key={t} className={`tab${tab === t ? ' active' : ''}`} onClick={() => { setTab(t); setMsg('') }}>
+            {t === 'gacha' ? '抽卡' : t === 'team' ? '编队' : '推图'}
+          </button>
+        ))}
+      </div>
+
+      {msg && <div className="msg">{msg}</div>}
+
+      {tab === 'gacha' && (
+        <div className="panel">
+          <button className="fight-btn" onClick={draw} disabled={diamonds < GACHA_COST}>
+            抽卡 ({GACHA_COST}💎)
+          </button>
+          {revealed && (
+            <div className="reveal" key={owned.length}>
+              <HeroCard hero={revealed} />
+              <div className="reveal-text">获得 {RARITY_LABEL[revealed.rarity]} · {revealed.name}!</div>
+            </div>
+          )}
+          <p className="hint">概率:SSR 5% / SR 20% / R 75% · 已拥有 {owned.length} 张</p>
+        </div>
+      )}
+
+      {tab === 'team' && (
+        <div className="panel">
+          <p className="hint">点击武将上阵(最多 {TEAM_MAX} 个),数字为出战顺序</p>
+          <div className="card-grid">
+            {owned.map((h, i) => (
+              <HeroCard
+                key={i}
+                hero={h}
+                selected={teamIdx.includes(i)}
+                badge={teamIdx.includes(i) ? String(teamIdx.indexOf(i) + 1) : undefined}
+                onClick={() => toggleTeam(i)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {tab === 'stage' && (
+        <div className="panel">
+          <div className="stage-info">第 {stage} 关</div>
+          <div className="enemy-preview">
+            {enemyTeam(stage).map((e) => (
+              <img key={e.id} className="enemy-mini" src={portraitUri(e.name[0], e.rarity)} alt={e.name} />
+            ))}
+          </div>
+          <button className="fight-btn" onClick={startBattle} disabled={!teamIdx.length}>⚔ 挑战</button>
+        </div>
+      )}
+    </div>
+  )
+}
