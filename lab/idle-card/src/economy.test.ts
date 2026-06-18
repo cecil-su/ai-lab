@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { idleGain, idleRate, IDLE_CAP_HOURS } from './economy'
+import { idleGain, idleRate, IDLE_CAP_HOURS, growthMul, upgradeCost } from './economy'
 
 describe('挂机经济 idleGain', () => {
   it('产率随关卡线性提升', () => {
@@ -21,5 +21,18 @@ describe('挂机经济 idleGain', () => {
     const capMs = IDLE_CAP_HOURS * 3600 * 1000
     const atCap = idleGain(capMs, 1)
     expect(idleGain(capMs * 10, 1)).toBe(atCap) // 离线 80h 仍只结算 8h
+  })
+})
+
+describe('养成 growthMul / upgradeCost', () => {
+  it('成长倍率每级 +10%', () => {
+    expect(growthMul(1)).toBe(1)
+    expect(growthMul(2)).toBeCloseTo(1.1)
+    expect(growthMul(6)).toBeCloseTo(1.5)
+  })
+
+  it('升级花费随当前等级递增', () => {
+    expect(upgradeCost(1)).toBe(50)
+    expect(upgradeCost(3)).toBe(150)
   })
 })

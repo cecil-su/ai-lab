@@ -1,4 +1,5 @@
 import type { Rarity, Team, UnitInit } from './battle/types'
+import { growthMul } from './economy'
 
 export interface Hero {
   id: string
@@ -10,6 +11,16 @@ export interface Hero {
   def: number
   speed: number
   skill: string
+}
+
+/** 玩家拥有的一张卡(带独立等级) */
+export interface OwnedHero {
+  heroId: string
+  level: number
+}
+
+export function getHero(id: string): Hero | undefined {
+  return POOL.find((h) => h.id === id)
 }
 
 // 卡池
@@ -44,8 +55,17 @@ export function rollHero(rng: () => number = Math.random): Hero {
 }
 
 // 把卡池英雄变成战斗单位(分配战斗位 id:A1/B1...,引擎和表现层靠首字母认队伍)
-export function toUnit(hero: Hero, team: Team, idx: number): UnitInit {
-  return { ...hero, id: `${team}${idx + 1}`, team }
+// level 按成长倍率放大三围(速度不变)
+export function toUnit(hero: Hero, team: Team, idx: number, level = 1): UnitInit {
+  const m = growthMul(level)
+  return {
+    ...hero,
+    id: `${team}${idx + 1}`,
+    team,
+    maxHp: Math.round(hero.maxHp * m),
+    atk: Math.round(hero.atk * m),
+    def: Math.round(hero.def * m),
+  }
 }
 
 // 关卡敌人:随关数轮换阵容并整体提升属性

@@ -1,9 +1,9 @@
-import { POOL, type Hero } from './heroes'
+import { POOL, type OwnedHero } from './heroes'
 
-const KEY = 'idle-card-save-v1'
+const KEY = 'idle-card-save-v2'
 
 export interface SaveData {
-  ownedIds: string[]
+  owned: OwnedHero[]
   teamIdx: number[]
   diamonds: number
   stage: number
@@ -35,7 +35,7 @@ export function clearSave(): void {
   }
 }
 
-/** 存档只存英雄 id,从卡池还原成 Hero 对象 */
-export function rehydrateOwned(ids: string[]): Hero[] {
-  return ids.map((id) => POOL.find((h) => h.id === id)).filter((h): h is Hero => !!h)
+/** 丢弃卡池里已不存在的英雄,防止存档错位 */
+export function sanitizeOwned(owned: OwnedHero[]): OwnedHero[] {
+  return owned.filter((o) => POOL.some((h) => h.id === o.heroId))
 }

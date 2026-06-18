@@ -6,8 +6,8 @@
 
 一个验证性的垂直切片:用 React + TypeScript 证明"前端能做出有打击感、有品质感的放置卡牌核心循环"。
 
-- ✅ 已跑通:战斗内核(事件流 + 单测)、立绘 + 品质边框、Lottie 技能特效、**抽卡 → 编队 → 推图 → 战斗 → 奖励** 完整循环、localStorage 存档、挂机产钻(含离线收益)。
-- ⏳ 还差(离"能放着玩"):养成(升级)、数值平衡、真美术。
+- ✅ 已跑通:战斗内核(事件流 + 单测)、立绘 + 品质边框、Lottie 技能特效、**抽卡 → 养成/编队 → 推图 → 战斗 → 挂机产钻** 完整闭环、localStorage 存档(含离线收益)、武将升级养成。
+- ⏳ 还差(离 MVP 达标):数值平衡、真美术。
 
 详见 [`docs/roadmap.md`](docs/roadmap.md)。立项缘起与调研见 [`docs/research-wechat-minigame-2026-06-18.md`](docs/research-wechat-minigame-2026-06-18.md)。
 

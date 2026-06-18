@@ -248,10 +248,11 @@ h1 {
   position: relative; width: 100px; padding: 8px 6px 10px;
   display: flex; flex-direction: column; align-items: center; gap: 4px;
   background: linear-gradient(160deg, rgba(70, 56, 130, 0.5), rgba(20, 16, 35, 0.6));
-  border: 2px solid #5b8bff; border-radius: 12px; cursor: pointer;
+  border: 2px solid #5b8bff; border-radius: 12px;
   transition: transform 0.1s;
 }
-.hero-card:not(:disabled):hover { transform: translateY(-3px); }
+.hero-card.clickable { cursor: pointer; }
+.hero-card.clickable:hover { transform: translateY(-3px); }
 .hero-card.rarity-SR { border-color: #c08bff; }
 .hero-card.rarity-SSR { border-color: #ffcf5c; box-shadow: 0 0 14px rgba(255, 207, 92, 0.4); }
 .hero-card.selected { outline: 3px solid #6bff9d; outline-offset: 1px; }
@@ -263,8 +264,19 @@ h1 {
 .hc-rarity.r-R { background: #3b6fd4; }
 .hc-rarity.r-SR { background: #8b48d0; }
 .hc-rarity.r-SSR { background: #d99422; color: #2a1a00; }
+.hc-lv {
+  position: absolute; top: 6px; right: 6px; font-size: 11px; font-weight: 800;
+  padding: 1px 6px; border-radius: 6px; color: #2a1a00;
+  background: linear-gradient(180deg, #ffe07a, #f0a93c);
+}
 .hc-name { font-size: 14px; font-weight: 700; color: #f0eada; }
 .hc-skill { font-size: 11px; color: #9b93b5; }
+.hc-up {
+  margin-top: 4px; padding: 3px 10px; font-size: 12px; font-weight: 700;
+  color: #06243a; border: none; border-radius: 12px; cursor: pointer;
+  background: linear-gradient(180deg, #9fe6ff, #4fb6e8);
+}
+.hc-up:disabled { filter: grayscale(0.6) brightness(0.8); cursor: default; }
 .hc-badge {
   position: absolute; top: -8px; right: -8px;
   width: 22px; height: 22px; line-height: 22px;

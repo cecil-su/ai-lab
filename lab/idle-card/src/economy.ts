@@ -14,3 +14,17 @@ export function idleGain(elapsedMs: number, stage: number): number {
   const ms = Math.min(Math.max(0, elapsedMs), capMs)
   return Math.floor((ms / 1000) * idleRate(stage))
 }
+
+// 养成:升级提升属性,花费随等级递增
+export const UPGRADE_BASE_COST = 50
+export const GROWTH_PER_LEVEL = 0.1
+
+/** 等级属性倍率:Lv.1 = 1.0,每级 +10% 基础值 */
+export function growthMul(level: number): number {
+  return 1 + GROWTH_PER_LEVEL * (level - 1)
+}
+
+/** 从当前等级升到下一级的钻石花费 */
+export function upgradeCost(level: number): number {
+  return UPGRADE_BASE_COST * level
+}

@@ -1,42 +1,57 @@
 import { useEffect, useState } from 'react'
 import { Battle } from './Battle'
-import { POOL, rollHero, toUnit, enemyTeam, type Hero } from './heroes'
+import { POOL, rollHero, toUnit, enemyTeam, getHero, type Hero, type OwnedHero } from './heroes'
 import type { Team, UnitInit } from './battle/types'
 import { portraitUri, RARITY_LABEL } from './portrait'
-import { idleGain, idleRate } from './economy'
-import { loadSave, writeSave, clearSave, rehydrateOwned } from './storage'
+import { idleGain, idleRate, upgradeCost } from './economy'
+import { loadSave, writeSave, clearSave, sanitizeOwned } from './storage'
 
 const GACHA_COST = 100
 const WIN_REWARD = 50
 const TEAM_MAX = 3
+const DEFAULT_OWNED: OwnedHero[] = [
+  { heroId: 'guanyu', level: 1 },
+  { heroId: 'zhangfei', level: 1 },
+]
 
 type Tab = 'gacha' | 'team' | 'stage'
 
-function HeroCard({ hero, selected, badge, onClick }: {
+function HeroCard({ hero, level, selected, badge, onSelect, upgrade }: {
   hero: Hero
+  level?: number
   selected?: boolean
   badge?: string
-  onClick?: () => void
+  onSelect?: () => void
+  upgrade?: { cost: number; canAfford: boolean; onUpgrade: () => void }
 }) {
   return (
-    <button
-      className={`hero-card rarity-${hero.rarity}${selected ? ' selected' : ''}`}
-      onClick={onClick}
-      disabled={!onClick}
+    <div
+      className={`hero-card rarity-${hero.rarity}${selected ? ' selected' : ''}${onSelect ? ' clickable' : ''}`}
+      onClick={onSelect}
     >
       <img className="hc-portrait" src={portraitUri(hero.name[0], hero.rarity)} alt={hero.name} />
       <span className={`hc-rarity r-${hero.rarity}`}>{RARITY_LABEL[hero.rarity]}</span>
+      {level != null && <span className="hc-lv">Lv.{level}</span>}
       <span className="hc-name">{hero.name}</span>
       <span className="hc-skill">{hero.skill}</span>
       {badge && <span className="hc-badge">{badge}</span>}
-    </button>
+      {upgrade && (
+        <button
+          className="hc-up"
+          onClick={(e) => { e.stopPropagation(); upgrade.onUpgrade() }}
+          disabled={!upgrade.canAfford}
+        >
+          升级 {upgrade.cost}💎
+        </button>
+      )}
+    </div>
   )
 }
 
 export default function App() {
   const [save] = useState(loadSave) // 仅读一次
   const [tab, setTab] = useState<Tab>('gacha')
-  const [owned, setOwned] = useState<Hero[]>(() => (save ? rehydrateOwned(save.ownedIds) : [POOL[0], POOL[2]])) // 起手送 关羽 + 张飞
+  const [owned, setOwned] = useState<OwnedHero[]>(() => (save ? sanitizeOwned(save.owned) : DEFAULT_OWNED))
   const [teamIdx, setTeamIdx] = useState<number[]>(() => save?.teamIdx ?? [0, 1])
   const [diamonds, setDiamonds] = useState(() => save?.diamonds ?? 600)
   const [stage, setStage] = useState(() => save?.stage ?? 1)
@@ -49,7 +64,7 @@ export default function App() {
 
   // 存档:任一关键状态变化即写入
   useEffect(() => {
-    writeSave({ ownedIds: owned.map((h) => h.id), teamIdx, diamonds, stage, lastTs })
+    writeSave({ owned, teamIdx, diamonds, stage, lastTs })
   }, [owned, teamIdx, diamonds, stage, lastTs])
 
   // 挂机:每秒刷新当前时间,据此结算待领钻石
@@ -67,7 +82,7 @@ export default function App() {
 
   const resetSave = () => {
     clearSave()
-    setOwned([POOL[0], POOL[2]])
+    setOwned(DEFAULT_OWNED)
     setTeamIdx([0, 1])
     setDiamonds(600)
     setStage(1)
@@ -80,7 +95,7 @@ export default function App() {
     if (diamonds < GACHA_COST) { setMsg('💎 不足'); return }
     const hero = rollHero()
     setDiamonds((d) => d - GACHA_COST)
-    setOwned((o) => [...o, hero])
+    setOwned((o) => [...o, { heroId: hero.id, level: 1 }])
     setRevealed(hero)
   }
 
@@ -90,6 +105,13 @@ export default function App() {
       if (t.length >= TEAM_MAX) return t
       return [...t, idx]
     })
+  }
+
+  const upgrade = (idx: number) => {
+    const cost = upgradeCost(owned[idx].level)
+    if (diamonds < cost) { setMsg('💎 不足,升不动'); return }
+    setDiamonds((d) => d - cost)
+    setOwned((o) => o.map((x, i) => (i === idx ? { ...x, level: x.level + 1 } : x)))
   }
 
   const startBattle = () => {
@@ -105,13 +127,16 @@ export default function App() {
       setStage((s) => s + 1)
       setDiamonds((d) => d + WIN_REWARD)
     } else {
-      setMsg(`第 ${stage} 关失败,练度不够,抽几张再来`)
+      setMsg(`第 ${stage} 关失败,去升级或抽卡再来`)
     }
     setInBattle(false)
   }
 
   if (inBattle) {
-    const playerUnits = teamIdx.map((oi, i) => toUnit(owned[oi], 'A', i))
+    const playerUnits = teamIdx.map((oi, i) => {
+      const oh = owned[oi]
+      return toUnit(getHero(oh.heroId)!, 'A', i, oh.level)
+    })
     const units: UnitInit[] = [...playerUnits, ...enemyTeam(stage)]
     return <Battle key={battleNo} units={units} onFinish={onFinish} />
   }
@@ -134,7 +159,7 @@ export default function App() {
       <div className="tabs">
         {(['gacha', 'team', 'stage'] as Tab[]).map((t) => (
           <button key={t} className={`tab${tab === t ? ' active' : ''}`} onClick={() => { setTab(t); setMsg('') }}>
-            {t === 'gacha' ? '抽卡' : t === 'team' ? '编队' : '推图'}
+            {t === 'gacha' ? '抽卡' : t === 'team' ? '编队/养成' : '推图'}
           </button>
         ))}
       </div>
@@ -158,17 +183,24 @@ export default function App() {
 
       {tab === 'team' && (
         <div className="panel">
-          <p className="hint">点击武将上阵(最多 {TEAM_MAX} 个),数字为出战顺序</p>
+          <p className="hint">点击卡片上阵(最多 {TEAM_MAX} 个),点「升级」耗钻提升属性</p>
           <div className="card-grid">
-            {owned.map((h, i) => (
-              <HeroCard
-                key={i}
-                hero={h}
-                selected={teamIdx.includes(i)}
-                badge={teamIdx.includes(i) ? String(teamIdx.indexOf(i) + 1) : undefined}
-                onClick={() => toggleTeam(i)}
-              />
-            ))}
+            {owned.map((oh, i) => {
+              const base = getHero(oh.heroId)
+              if (!base) return null
+              const cost = upgradeCost(oh.level)
+              return (
+                <HeroCard
+                  key={i}
+                  hero={base}
+                  level={oh.level}
+                  selected={teamIdx.includes(i)}
+                  badge={teamIdx.includes(i) ? String(teamIdx.indexOf(i) + 1) : undefined}
+                  onSelect={() => toggleTeam(i)}
+                  upgrade={{ cost, canAfford: diamonds >= cost, onUpgrade: () => upgrade(i) }}
+                />
+              )
+            })}
           </div>
         </div>
       )}
