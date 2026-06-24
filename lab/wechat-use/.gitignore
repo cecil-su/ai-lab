@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+build/
+dist/
+# never commit keys or decrypted data
+keys.json
+*.db
+*.sqlite

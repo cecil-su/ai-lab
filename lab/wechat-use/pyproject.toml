@@ -1,0 +1,17 @@
+[project]
+name = "wechat-use"
+version = "0.0.1"
+description = "Self-built macOS WeChat local API (replica). Phase 0-1 scaffold."
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+# zstandard is only needed to decode compressed message content (Phase 1, real data).
+zstd = ["zstandard>=0.22"]
+
+[project.scripts]
+wechat-use = "wechat_use.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
