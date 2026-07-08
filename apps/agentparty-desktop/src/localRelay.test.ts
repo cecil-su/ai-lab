@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { LocalRelay, buildRunnerContext } from "./localRelay";
 import type { ChannelEvent, ChannelMessage, LocalAgentConfig, RunnerContext, ServerProfile, StatusUpdate, TokenMetadata } from "./types";
 import type { ChannelSubscription, ProtocolClient } from "./protocolClient";
-import { MemoryRunnerService } from "./runnerService";
+import { MemoryRunnerService, type RunnerService } from "./runnerService";
+import { MemoryPendingQueueStore } from "./pendingQueueStore";
 
 const human: TokenMetadata = {
   id: "tok-human",
@@ -53,14 +54,16 @@ function message(sequence: number, body: string, mentions: string[] = ["bot"], s
 
 class FakeProtocolClient implements ProtocolClient {
   statuses: string[] = [];
+  posts: { body: string; replyTo: string | null }[] = [];
   watcher: ((event: ChannelEvent) => void) | null = null;
 
   async loadHistory() {
     return { events: [], last_sequence: 0 };
   }
 
-  async postMessage() {
-    return message(99, "posted");
+  async postMessage(_profile: ServerProfile, _token: string, request: { body: string; reply_to_message_id: string | null }) {
+    this.posts.push({ body: request.body, replyTo: request.reply_to_message_id });
+    return message(99, request.body, [], agentSender, request.reply_to_message_id);
   }
 
   async postStatus(_profile: ServerProfile, _token: string, request: { state: string }): Promise<StatusUpdate> {
@@ -83,12 +86,14 @@ class FakeProtocolClient implements ProtocolClient {
 describe("LocalRelay", () => {
   let protocol: FakeProtocolClient;
   let runner: MemoryRunnerService;
+  let pendingQueue: MemoryPendingQueueStore;
   let relay: LocalRelay;
 
   beforeEach(() => {
     protocol = new FakeProtocolClient();
     runner = new MemoryRunnerService();
-    relay = new LocalRelay(protocol, runner);
+    pendingQueue = new MemoryPendingQueueStore();
+    relay = new LocalRelay(protocol, runner, pendingQueue);
   });
 
   it("advertises waiting on start and done on stop", async () => {
@@ -105,6 +110,55 @@ describe("LocalRelay", () => {
     expect(runner.logs).toHaveLength(1);
     expect(runner.logs[0]?.draftReply).toContain("please help");
     expect(relay.getSnapshot().processedMessageIds).toEqual(["msg-2"]);
+  });
+
+  it("creates pending draft replies from successful fake runner results by default", async () => {
+    await relay.start({ profile, token: "token", config, recentMessages: [], lastSequence: 1 });
+    await relay.handleEvent({ type: "Message", payload: message(2, "please help") });
+
+    await expect(pendingQueue.listPendingDrafts()).resolves.toEqual([
+      expect.objectContaining({
+        agentConfigId: "agent-1",
+        triggeringMessageId: "msg-2",
+        body: expect.stringContaining("please help"),
+        status: "pending",
+      }),
+    ]);
+  });
+
+  it("auto-sends runner results when configured and bypasses the pending queue", async () => {
+    await relay.start({
+      profile,
+      token: "token",
+      config: { ...config, sendingPolicy: "auto-send" },
+      recentMessages: [],
+      lastSequence: 1,
+    });
+    await relay.handleEvent({ type: "Message", payload: message(2, "please help") });
+
+    expect(protocol.posts).toEqual([{ body: "Fake runner bot saw: please help", replyTo: "msg-2" }]);
+    await expect(pendingQueue.listPendingDrafts()).resolves.toEqual([]);
+  });
+
+  it("creates blocked pending items when the runner fails", async () => {
+    const failingRunner: RunnerService = {
+      listRunnerLogs: async () => [],
+      runFakeRunner: async () => {
+        throw new Error("runner failed");
+      },
+    };
+    relay = new LocalRelay(protocol, failingRunner, pendingQueue);
+
+    await relay.start({ profile, token: "token", config, recentMessages: [], lastSequence: 1 });
+    await relay.handleEvent({ type: "Message", payload: message(2, "please help") });
+
+    await expect(pendingQueue.listPendingDrafts()).resolves.toEqual([
+      expect.objectContaining({
+        triggeringMessageId: "msg-2",
+        status: "blocked",
+        error: "runner failed",
+      }),
+    ]);
   });
 
   it("refuses to start a config bound to another channel", async () => {

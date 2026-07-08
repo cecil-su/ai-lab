@@ -1,3 +1,4 @@
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{fs, path::PathBuf};
@@ -87,6 +88,39 @@ struct RunnerLogEntry {
     stderr: String,
     exit_code: i32,
     context_file_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PendingDraftInput {
+    profile_id: String,
+    server_url: String,
+    channel_id: String,
+    agent_config_id: String,
+    agent_name: String,
+    triggering_message_id: String,
+    body: String,
+    status: String,
+    error: Option<String>,
+    runner_result: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PendingDraft {
+    id: String,
+    profile_id: String,
+    server_url: String,
+    channel_id: String,
+    agent_config_id: String,
+    agent_name: String,
+    triggering_message_id: String,
+    body: String,
+    status: String,
+    error: Option<String>,
+    runner_result: Option<Value>,
+    created_at: i64,
+    updated_at: i64,
 }
 
 #[tauri::command]
@@ -196,6 +230,26 @@ fn list_runner_logs() -> Result<Vec<RunnerLogEntry>, String> {
     read_runner_logs().map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn list_pending_drafts() -> Result<Vec<PendingDraft>, String> {
+    db_list_pending_drafts().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn create_pending_draft(input: PendingDraftInput) -> Result<PendingDraft, String> {
+    db_create_pending_draft(input).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn update_pending_draft_body(id: String, body: String) -> Result<PendingDraft, String> {
+    db_update_pending_draft_body(&id, &body).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn delete_pending_draft(id: String) -> Result<(), String> {
+    db_delete_pending_draft(&id).map_err(|error| error.to_string())
+}
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -205,7 +259,11 @@ fn main() {
             list_local_agent_configs,
             save_local_agent_config,
             run_fake_runner,
-            list_runner_logs
+            list_runner_logs,
+            list_pending_drafts,
+            create_pending_draft,
+            update_pending_draft_body,
+            delete_pending_draft
         ])
         .run(tauri::generate_context!())
         .expect("error while running AgentParty desktop workbench");
@@ -241,6 +299,10 @@ fn agent_configs_path() -> Result<PathBuf, std::io::Error> {
 
 fn runner_logs_path() -> Result<PathBuf, std::io::Error> {
     app_data_path("runner-logs.json")
+}
+
+fn local_database_path() -> Result<PathBuf, std::io::Error> {
+    app_data_path("agentparty-desktop.sqlite3")
 }
 
 fn read_profiles() -> Result<Vec<ServerProfile>, Box<dyn std::error::Error>> {
@@ -293,6 +355,130 @@ fn append_runner_log(log: RunnerLogEntry) -> Result<(), Box<dyn std::error::Erro
     Ok(())
 }
 
+fn open_local_database() -> Result<Connection, Box<dyn std::error::Error>> {
+    let connection = Connection::open(local_database_path()?)?;
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS pending_drafts (
+            id TEXT PRIMARY KEY,
+            profile_id TEXT NOT NULL,
+            server_url TEXT NOT NULL,
+            channel_id TEXT NOT NULL,
+            agent_config_id TEXT NOT NULL,
+            agent_name TEXT NOT NULL,
+            triggering_message_id TEXT NOT NULL,
+            body TEXT NOT NULL,
+            status TEXT NOT NULL,
+            error TEXT,
+            runner_result_json TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );",
+    )?;
+    Ok(connection)
+}
+
+fn db_list_pending_drafts() -> Result<Vec<PendingDraft>, Box<dyn std::error::Error>> {
+    let connection = open_local_database()?;
+    let mut statement = connection.prepare(
+        "SELECT id, profile_id, server_url, channel_id, agent_config_id, agent_name,
+                triggering_message_id, body, status, error, runner_result_json, created_at, updated_at
+         FROM pending_drafts
+         ORDER BY created_at ASC",
+    )?;
+    let rows = statement.query_map([], pending_draft_from_row)?;
+    let mut drafts = Vec::new();
+    for row in rows {
+        drafts.push(row?);
+    }
+    Ok(drafts)
+}
+
+fn db_create_pending_draft(input: PendingDraftInput) -> Result<PendingDraft, Box<dyn std::error::Error>> {
+    let connection = open_local_database()?;
+    let now = unix_now_millis_i64();
+    let id = format!("draft-{}", unix_now_nanos());
+    let runner_result_json = input
+        .runner_result
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()?;
+    connection.execute(
+        "INSERT INTO pending_drafts (
+            id, profile_id, server_url, channel_id, agent_config_id, agent_name,
+            triggering_message_id, body, status, error, runner_result_json, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        params![
+            id,
+            input.profile_id,
+            input.server_url,
+            input.channel_id,
+            input.agent_config_id,
+            input.agent_name,
+            input.triggering_message_id,
+            input.body,
+            input.status,
+            input.error,
+            runner_result_json,
+            now,
+            now
+        ],
+    )?;
+    db_get_pending_draft(&connection, &id)
+}
+
+fn db_update_pending_draft_body(id: &str, body: &str) -> Result<PendingDraft, Box<dyn std::error::Error>> {
+    let connection = open_local_database()?;
+    connection.execute(
+        "UPDATE pending_drafts SET body = ?1, updated_at = ?2 WHERE id = ?3",
+        params![body, unix_now_millis_i64(), id],
+    )?;
+    db_get_pending_draft(&connection, id)
+}
+
+fn db_delete_pending_draft(id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let connection = open_local_database()?;
+    connection.execute("DELETE FROM pending_drafts WHERE id = ?1", [id])?;
+    Ok(())
+}
+
+fn db_get_pending_draft(
+    connection: &Connection,
+    id: &str,
+) -> Result<PendingDraft, Box<dyn std::error::Error>> {
+    Ok(connection.query_row(
+        "SELECT id, profile_id, server_url, channel_id, agent_config_id, agent_name,
+                triggering_message_id, body, status, error, runner_result_json, created_at, updated_at
+         FROM pending_drafts
+         WHERE id = ?1",
+        [id],
+        pending_draft_from_row,
+    )?)
+}
+
+fn pending_draft_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PendingDraft> {
+    let runner_result_json: Option<String> = row.get(10)?;
+    let runner_result = runner_result_json
+        .as_deref()
+        .map(serde_json::from_str)
+        .transpose()
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+    Ok(PendingDraft {
+        id: row.get(0)?,
+        profile_id: row.get(1)?,
+        server_url: row.get(2)?,
+        channel_id: row.get(3)?,
+        agent_config_id: row.get(4)?,
+        agent_name: row.get(5)?,
+        triggering_message_id: row.get(6)?,
+        body: row.get(7)?,
+        status: row.get(8)?,
+        error: row.get(9)?,
+        runner_result,
+        created_at: row.get(11)?,
+        updated_at: row.get(12)?,
+    })
+}
+
 fn make_profile_id() -> String {
     format!("profile-{}", unix_now_millis())
 }
@@ -309,6 +495,17 @@ fn unix_now_millis() -> u128 {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system clock before unix epoch")
         .as_millis()
+}
+
+fn unix_now_millis_i64() -> i64 {
+    unix_now_millis() as i64
+}
+
+fn unix_now_nanos() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock before unix epoch")
+        .as_nanos()
 }
 
 fn credential_name(profile_id: &str) -> String {
@@ -387,9 +584,13 @@ fn read_token(_profile_id: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
     fn fake_runner_writes_context_file_and_log_result() {
+        let _guard = TEST_MUTEX.lock().expect("test lock poisoned");
         let root = std::env::temp_dir().join(format!("agentparty-desktop-test-{}", unix_now_millis()));
         std::env::set_var("AGENTPARTY_DESKTOP_DATA_DIR", &root);
         let workdir = root.join("workdir");
@@ -425,6 +626,51 @@ mod tests {
         let logs = read_runner_logs().expect("runner logs should be readable");
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].triggering_message_id, "msg-1");
+        std::env::remove_var("AGENTPARTY_DESKTOP_DATA_DIR");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn pending_drafts_persist_in_local_sqlite() {
+        let _guard = TEST_MUTEX.lock().expect("test lock poisoned");
+        let root = std::env::temp_dir().join(format!("agentparty-desktop-test-{}", unix_now_millis()));
+        std::env::set_var("AGENTPARTY_DESKTOP_DATA_DIR", &root);
+
+        let draft = create_pending_draft(PendingDraftInput {
+            profile_id: "profile-1".to_string(),
+            server_url: "http://127.0.0.1:4180".to_string(),
+            channel_id: "chan-1".to_string(),
+            agent_config_id: "agent-1".to_string(),
+            agent_name: "bot".to_string(),
+            triggering_message_id: "msg-1".to_string(),
+            body: "draft body".to_string(),
+            status: "pending".to_string(),
+            error: None,
+            runner_result: Some(serde_json::json!({
+                "status": "done",
+                "draftReply": "draft body",
+                "stdout": "ok",
+                "stderr": "",
+                "exitCode": 0,
+                "contextFilePath": "context.json"
+            })),
+        })
+        .expect("pending draft should be created");
+
+        let listed = list_pending_drafts().expect("pending drafts should list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].body, "draft body");
+        assert!(listed[0].runner_result.is_some());
+
+        let edited = update_pending_draft_body(draft.id.clone(), "edited".to_string())
+            .expect("pending draft should update");
+        assert_eq!(edited.body, "edited");
+
+        delete_pending_draft(draft.id).expect("pending draft should delete");
+        assert!(list_pending_drafts()
+            .expect("pending drafts should list")
+            .is_empty());
+
         std::env::remove_var("AGENTPARTY_DESKTOP_DATA_DIR");
         let _ = fs::remove_dir_all(root);
     }

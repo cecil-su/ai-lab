@@ -136,7 +136,7 @@ button:disabled {
 
 .workbench {
   display: grid;
-  grid-template-rows: auto auto 1fr auto;
+  grid-template-rows: auto auto auto 1fr auto;
   min-width: 0;
 }
 
@@ -186,6 +186,62 @@ button:disabled {
   gap: 12px;
   overflow: auto;
   padding: 18px;
+}
+
+.pending-queue {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.8fr) minmax(0, 1.2fr);
+  gap: 12px;
+  border-bottom: 1px solid #d8dee7;
+  background: #fff;
+  padding: 12px 18px;
+}
+
+.pending-list {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  max-height: 170px;
+  overflow: auto;
+}
+
+.pending-item {
+  display: grid;
+  gap: 3px;
+  border: 1px solid #d8dee7;
+  background: #f8fafc;
+  color: #17202a;
+  text-align: left;
+}
+
+.pending-item.selected {
+  border-color: #1f6feb;
+}
+
+.pending-item small {
+  color: #667085;
+}
+
+.pending-editor {
+  display: grid;
+  gap: 8px;
+}
+
+.pending-editor textarea {
+  min-height: 90px;
+}
+
+.pending-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.pending-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .message {
@@ -269,5 +325,9 @@ button:disabled {
   .sidebar {
     border-right: 0;
     border-bottom: 1px solid #d8dee7;
+  }
+
+  .pending-queue {
+    grid-template-columns: 1fr;
   }
 }

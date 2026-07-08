@@ -1,17 +1,20 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { Lock, Plug, Reply, Send, ShieldAlert, ShieldCheck, Square, Bot, Play, WifiOff } from "lucide-react";
+import { Lock, Plug, Reply, Send, ShieldAlert, ShieldCheck, Square, Bot, Play, Trash2, WifiOff } from "lucide-react";
 import { MemoryAgentConfigStore, TauriAgentConfigStore } from "./agentConfigStore";
 import { LocalRelay, type LocalRelaySnapshot } from "./localRelay";
+import { PendingQueue } from "./pendingQueue";
+import { MemoryPendingQueueStore, TauriPendingQueueStore } from "./pendingQueueStore";
 import { HttpProtocolClient } from "./protocolClient";
 import { classifyServerUrl, MemoryProfileStore, TauriProfileStore } from "./profileStore";
 import { MemoryRunnerService, TauriRunnerService } from "./runnerService";
-import type { ChannelMessage, LocalAgentConfig, LocalAgentConfigInput, ServerProfile, ServerProfileInput } from "./types";
+import type { ChannelMessage, LocalAgentConfig, LocalAgentConfigInput, PendingDraft, ServerProfile, ServerProfileInput } from "./types";
 import { WorkbenchModel, type WorkbenchSnapshot } from "./workbenchModel";
 import "./styles.css";
 
 const fallbackStore = new MemoryProfileStore();
 const fallbackAgentStore = new MemoryAgentConfigStore();
 const fallbackRunner = new MemoryRunnerService();
+const fallbackPendingQueueStore = new MemoryPendingQueueStore();
 
 function createProfileStore() {
   try {
@@ -37,13 +40,24 @@ function createRunnerService() {
   }
 }
 
+function createPendingQueueStore() {
+  try {
+    return new TauriPendingQueueStore();
+  } catch {
+    return fallbackPendingQueueStore;
+  }
+}
+
 export function App() {
   const profileStore = useMemo(createProfileStore, []);
   const agentConfigStore = useMemo(createAgentConfigStore, []);
   const runnerService = useMemo(createRunnerService, []);
+  const pendingQueueStore = useMemo(createPendingQueueStore, []);
   const protocol = useMemo(() => new HttpProtocolClient(), []);
   const [profiles, setProfiles] = useState<ServerProfile[]>([]);
   const [agentConfigs, setAgentConfigs] = useState<LocalAgentConfig[]>([]);
+  const [pendingDrafts, setPendingDrafts] = useState<PendingDraft[]>([]);
+  const [selectedDraftId, setSelectedDraftId] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState<WorkbenchSnapshot>({
     connectionState: "disconnected",
     profile: null,
@@ -59,12 +73,18 @@ export function App() {
     error: null,
   });
   const model = useMemo(() => new WorkbenchModel(profileStore, protocol, setSnapshot), [profileStore, protocol]);
-  const relay = useMemo(() => new LocalRelay(protocol, runnerService, setRelaySnapshot), [protocol, runnerService]);
+  const pendingQueue = useMemo(() => new PendingQueue(pendingQueueStore, profileStore, protocol), [pendingQueueStore, profileStore, protocol]);
+  const relay = useMemo(() => new LocalRelay(protocol, runnerService, pendingQueueStore, setRelaySnapshot), [pendingQueueStore, protocol, runnerService]);
 
   useEffect(() => {
     void profileStore.listProfiles().then(setProfiles);
     void agentConfigStore.listAgentConfigs().then(setAgentConfigs);
-  }, [agentConfigStore, profileStore]);
+    void pendingQueue.list().then(setPendingDrafts);
+  }, [agentConfigStore, pendingQueue, profileStore]);
+
+  useEffect(() => {
+    void pendingQueue.list().then(setPendingDrafts);
+  }, [pendingQueue, relaySnapshot.lastResult, relaySnapshot.error, relaySnapshot.processedMessageIds.length]);
 
   async function saveProfile(input: ServerProfileInput) {
     const profile = await profileStore.saveProfile(input);
@@ -88,6 +108,24 @@ export function App() {
       recentMessages: snapshot.messages,
       lastSequence: snapshot.lastSequence,
     });
+  }
+
+  async function editDraft(id: string, body: string) {
+    await pendingQueue.edit(id, body);
+    setPendingDrafts(await pendingQueue.list());
+  }
+
+  async function discardDraft(id: string) {
+    await pendingQueue.discard(id);
+    setSelectedDraftId((current) => (current === id ? null : current));
+    setPendingDrafts(await pendingQueue.list());
+  }
+
+  async function sendDraft(draft: PendingDraft) {
+    await pendingQueue.send(draft);
+    setSelectedDraftId(null);
+    setPendingDrafts(await pendingQueue.list());
+    await model.catchUp();
   }
 
   return (
@@ -124,6 +162,14 @@ export function App() {
           </button>
         </header>
         {snapshot.error ? <div className="error">{snapshot.error}</div> : null}
+        <PendingQueuePanel
+          drafts={pendingDrafts}
+          selectedDraftId={selectedDraftId}
+          onSelect={setSelectedDraftId}
+          onEdit={editDraft}
+          onDiscard={discardDraft}
+          onSend={sendDraft}
+        />
         <MessageList messages={snapshot.messages} selected={snapshot.selectedReplyTo} onReply={(message) => model.selectReplyTo(message.id)} />
         <Composer
           disabled={!model.canSend()}
@@ -133,6 +179,72 @@ export function App() {
         />
       </section>
     </main>
+  );
+}
+
+function PendingQueuePanel({
+  drafts,
+  selectedDraftId,
+  onSelect,
+  onEdit,
+  onDiscard,
+  onSend,
+}: {
+  drafts: PendingDraft[];
+  selectedDraftId: string | null;
+  onSelect: (id: string | null) => void;
+  onEdit: (id: string, body: string) => Promise<void>;
+  onDiscard: (id: string) => Promise<void>;
+  onSend: (draft: PendingDraft) => Promise<void>;
+}) {
+  const selected = drafts.find((draft) => draft.id === selectedDraftId) ?? drafts[0] ?? null;
+  const [body, setBody] = useState(selected?.body ?? "");
+
+  useEffect(() => {
+    setBody(selected?.body ?? "");
+  }, [selected?.id, selected?.body]);
+
+  if (drafts.length === 0) return null;
+
+  return (
+    <section className="pending-queue">
+      <div className="pending-list">
+        {drafts.map((draft) => (
+          <button
+            className={selected?.id === draft.id ? "pending-item selected" : "pending-item"}
+            key={draft.id}
+            onClick={() => onSelect(draft.id)}
+            type="button"
+          >
+            <span>{draft.agentName}</span>
+            <small>{draft.status} · reply to {draft.triggeringMessageId}</small>
+          </button>
+        ))}
+      </div>
+      {selected ? (
+        <form
+          className="pending-editor"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void onSend({ ...selected, body });
+          }}
+        >
+          {selected.status === "blocked" ? <div className="error compact">{selected.error ?? "Runner blocked"}</div> : null}
+          <textarea value={body} onChange={(event) => setBody(event.target.value)} disabled={selected.status !== "pending"} />
+          <div className="pending-actions">
+            <button type="button" disabled={selected.status !== "pending"} onClick={() => void onEdit(selected.id, body)}>
+              Save edit
+            </button>
+            <button type="submit" disabled={selected.status !== "pending" || !body.trim()}>
+              <Send size={16} /> Send
+            </button>
+            <button className="icon-button" type="button" onClick={() => void onDiscard(selected.id)} title="Discard">
+              <Trash2 size={16} />
+            </button>
+          </div>
+        </form>
+      ) : null}
+    </section>
   );
 }
 

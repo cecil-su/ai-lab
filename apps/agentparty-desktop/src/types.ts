@@ -138,3 +138,34 @@ export type RunnerLogEntry = RunnerResult & {
   triggeringMessageId: string;
   createdAt: number;
 };
+
+export type PendingDraftStatus = "pending" | "blocked";
+
+export type PendingDraft = {
+  id: string;
+  profileId: string;
+  serverUrl: string;
+  channelId: string;
+  agentConfigId: string;
+  agentName: string;
+  triggeringMessageId: string;
+  body: string;
+  status: PendingDraftStatus;
+  error: string | null;
+  runnerResult: RunnerResult | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type PendingDraftInput = {
+  profileId: string;
+  serverUrl: string;
+  channelId: string;
+  agentConfigId: string;
+  agentName: string;
+  triggeringMessageId: string;
+  body: string;
+  status: PendingDraftStatus;
+  error: string | null;
+  runnerResult: RunnerResult | null;
+};

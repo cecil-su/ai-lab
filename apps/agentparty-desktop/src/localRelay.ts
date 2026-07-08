@@ -1,6 +1,7 @@
 import type { ChannelEvent, ChannelMessage, LocalAgentConfig, RunnerContext, RunnerResult, ServerProfile } from "./types";
 import type { ChannelSubscription, ProtocolClient } from "./protocolClient";
 import type { RunnerService } from "./runnerService";
+import type { PendingQueueStore } from "./pendingQueueStore";
 
 export type RelayState = "stopped" | "starting" | "running";
 
@@ -32,6 +33,7 @@ export class LocalRelay {
   constructor(
     private readonly protocol: ProtocolClient,
     private readonly runner: RunnerService,
+    private readonly pendingQueue?: PendingQueueStore,
     private readonly notify: (snapshot: LocalRelaySnapshot) => void = () => {},
   ) {}
 
@@ -100,6 +102,7 @@ export class LocalRelay {
     const context = buildRunnerContext(this.config, message, this.recentMessages);
     try {
       const result = await this.runner.runFakeRunner(this.config, context);
+      await this.handleRunnerResult(message, result);
       this.processedMessageIds.add(message.id);
       this.set({
         processedMessageIds: [...this.processedMessageIds],
@@ -107,8 +110,51 @@ export class LocalRelay {
         error: null,
       });
     } catch (error) {
-      this.set({ error: error instanceof Error ? error.message : String(error) });
+      const messageText = error instanceof Error ? error.message : String(error);
+      await this.createBlockedPendingItem(message, messageText);
+      this.set({ error: messageText });
     }
+  }
+
+  private async handleRunnerResult(message: ChannelMessage, result: RunnerResult): Promise<void> {
+    if (!this.config || !this.profile || !this.token) return;
+    if (result.status === "done" && this.config.sendingPolicy === "auto-send") {
+      await this.protocol.postMessage(this.profile, this.token, {
+        body: result.draftReply,
+        mentions: [],
+        reply_to_message_id: message.id,
+      });
+      return;
+    }
+
+    await this.pendingQueue?.createPendingDraft({
+      profileId: this.profile.id,
+      serverUrl: this.profile.serverUrl,
+      channelId: this.profile.channelId,
+      agentConfigId: this.config.id,
+      agentName: this.config.name,
+      triggeringMessageId: message.id,
+      body: result.draftReply,
+      status: result.status === "done" ? "pending" : "blocked",
+      error: result.status === "done" ? null : result.stderr || "Runner blocked",
+      runnerResult: result,
+    });
+  }
+
+  private async createBlockedPendingItem(message: ChannelMessage, error: string): Promise<void> {
+    if (!this.config || !this.profile) return;
+    await this.pendingQueue?.createPendingDraft({
+      profileId: this.profile.id,
+      serverUrl: this.profile.serverUrl,
+      channelId: this.profile.channelId,
+      agentConfigId: this.config.id,
+      agentName: this.config.name,
+      triggeringMessageId: message.id,
+      body: "",
+      status: "blocked",
+      error,
+      runnerResult: null,
+    });
   }
 
   private remember(message: ChannelMessage): void {
