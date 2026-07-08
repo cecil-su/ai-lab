@@ -1,0 +1,12 @@
+{
+  "name": "agentparty-main-service",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AgentParty Rust intranet main service",
+  "scripts": {
+    "dev": "cargo run",
+    "build": "cargo build",
+    "test": "cargo test",
+    "check": "cargo check"
+  }
+}
