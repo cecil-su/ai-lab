@@ -1,7 +1,13 @@
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{fs, path::{Path, PathBuf}, process::Command};
+use std::{
+    collections::HashMap,
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+};
 
 const APP_DIR: &str = "agentparty-desktop";
 const CREDENTIAL_PREFIX: &str = "AgentParty Desktop Token";
@@ -34,6 +40,7 @@ struct LocalAgentConfigInput {
     name: String,
     channel_id: String,
     runner_kind: RunnerKind,
+    custom_command: Option<String>,
     workdir: String,
     workdir_mode: WorkdirMode,
     sending_policy: SendingPolicy,
@@ -46,6 +53,7 @@ struct LocalAgentConfig {
     name: String,
     channel_id: String,
     runner_kind: RunnerKind,
+    custom_command: Option<String>,
     workdir: String,
     #[serde(default = "default_workdir_mode")]
     workdir_mode: WorkdirMode,
@@ -59,6 +67,7 @@ struct LocalAgentConfig {
 enum RunnerKind {
     Fake,
     Codex,
+    CustomCommand,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -150,7 +159,10 @@ fn save_server_profile(input: ServerProfileInput) -> Result<ServerProfile, Strin
         name: input.name.trim().to_string(),
         server_url: normalize_server_url(&input.server_url)?,
         channel_id: input.channel_id.trim().to_string(),
-        created_at: existing.as_ref().map(|profile| profile.created_at).unwrap_or(now),
+        created_at: existing
+            .as_ref()
+            .map(|profile| profile.created_at)
+            .unwrap_or(now),
         updated_at: now,
     };
 
@@ -176,17 +188,25 @@ fn list_local_agent_configs() -> Result<Vec<LocalAgentConfig>, String> {
 fn save_local_agent_config(input: LocalAgentConfigInput) -> Result<LocalAgentConfig, String> {
     let mut configs = read_agent_configs().map_err(|error| error.to_string())?;
     let now = unix_now();
-    let id = input.id.unwrap_or_else(|| format!("agent-{}", unix_now_millis()));
+    let id = input
+        .id
+        .unwrap_or_else(|| format!("agent-{}", unix_now_millis()));
     let existing = configs.iter().find(|config| config.id == id).cloned();
     let config = LocalAgentConfig {
         id: id.clone(),
         name: input.name.trim().to_string(),
         channel_id: input.channel_id.trim().to_string(),
         runner_kind: input.runner_kind,
+        custom_command: input
+            .custom_command
+            .and_then(|command| non_empty_trimmed(command.as_str())),
         workdir: input.workdir.trim().to_string(),
         workdir_mode: input.workdir_mode,
         sending_policy: input.sending_policy,
-        created_at: existing.as_ref().map(|config| config.created_at).unwrap_or(now),
+        created_at: existing
+            .as_ref()
+            .map(|config| config.created_at)
+            .unwrap_or(now),
         updated_at: now,
     };
 
@@ -199,6 +219,11 @@ fn save_local_agent_config(input: LocalAgentConfigInput) -> Result<LocalAgentCon
 
 fn default_workdir_mode() -> WorkdirMode {
     WorkdirMode::ReadOnly
+}
+
+fn non_empty_trimmed(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
 }
 
 #[tauri::command]
@@ -238,6 +263,14 @@ fn run_codex_runner(
     run_codex_runner_with_executor(agent_config, context, run_codex_process)
 }
 
+#[tauri::command]
+fn run_custom_command_runner(
+    agent_config: LocalAgentConfig,
+    context: Value,
+) -> Result<RunnerResult, String> {
+    run_custom_command_runner_with_executor(agent_config, context, run_custom_command_process)
+}
+
 struct RunnerContextFile {
     triggering_message_id: String,
     body: String,
@@ -245,6 +278,19 @@ struct RunnerContextFile {
 }
 
 struct CodexProcessOutput {
+    stdout: String,
+    stderr: String,
+    exit_code: i32,
+}
+
+struct CustomCommandProcessRequest {
+    command: String,
+    context_file_path: PathBuf,
+    stdin: String,
+    env: HashMap<String, String>,
+}
+
+struct CustomCommandProcessOutput {
     stdout: String,
     stderr: String,
     exit_code: i32,
@@ -342,6 +388,152 @@ fn normalize_codex_output(
         status: status.to_string(),
         draft_reply: final_message.unwrap_or_default(),
         stdout: append_codex_session_metadata(output.stdout),
+        stderr,
+        exit_code: output.exit_code,
+        context_file_path: runner_context
+            .context_file_path
+            .to_string_lossy()
+            .to_string(),
+    }
+}
+
+fn run_custom_command_runner_with_executor(
+    agent_config: LocalAgentConfig,
+    context: Value,
+    execute: impl FnOnce(CustomCommandProcessRequest) -> Result<CustomCommandProcessOutput, String>,
+) -> Result<RunnerResult, String> {
+    let runner_context = write_runner_context(&agent_config, &context)?;
+    let command = agent_config
+        .custom_command
+        .as_deref()
+        .and_then(non_empty_trimmed);
+    let result = match command {
+        Some(command) => {
+            let mut env = HashMap::new();
+            env.insert(
+                "AP_CONTEXT_FILE".to_string(),
+                runner_context
+                    .context_file_path
+                    .to_string_lossy()
+                    .to_string(),
+            );
+            let request = CustomCommandProcessRequest {
+                command,
+                context_file_path: runner_context.context_file_path.clone(),
+                stdin: runner_context.body.clone(),
+                env,
+            };
+            match execute(request) {
+                Ok(output) => normalize_custom_command_output(&runner_context, output),
+                Err(error) => RunnerResult {
+                    status: "blocked".to_string(),
+                    draft_reply: String::new(),
+                    stdout: String::new(),
+                    stderr: error,
+                    exit_code: 1,
+                    context_file_path: runner_context
+                        .context_file_path
+                        .to_string_lossy()
+                        .to_string(),
+                },
+            }
+        }
+        None => RunnerResult {
+            status: "blocked".to_string(),
+            draft_reply: String::new(),
+            stdout: String::new(),
+            stderr: "Custom command is required".to_string(),
+            exit_code: 1,
+            context_file_path: runner_context
+                .context_file_path
+                .to_string_lossy()
+                .to_string(),
+        },
+    };
+    append_runner_result_log(
+        &agent_config,
+        &runner_context.triggering_message_id,
+        &result,
+    )?;
+    Ok(result)
+}
+
+fn run_custom_command_process(
+    request: CustomCommandProcessRequest,
+) -> Result<CustomCommandProcessOutput, String> {
+    let workdir = request
+        .context_file_path
+        .parent()
+        .ok_or_else(|| "runner context file has no parent directory".to_string())?;
+    let mut command = shell_command(&request.command);
+    let mut child = command
+        .current_dir(workdir)
+        .envs(request.env.iter())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("failed to start custom command runner: {error}"))?;
+
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin
+            .write_all(request.stdin.as_bytes())
+            .map_err(|error| format!("failed to write custom command stdin: {error}"))?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("failed to wait for custom command runner: {error}"))?;
+
+    Ok(CustomCommandProcessOutput {
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        exit_code: output.status.code().unwrap_or(1),
+    })
+}
+
+#[cfg(windows)]
+fn shell_command(command: &str) -> Command {
+    let mut shell = Command::new("powershell");
+    shell.arg("-NoProfile").arg("-Command").arg(command);
+    shell
+}
+
+#[cfg(not(windows))]
+fn shell_command(command: &str) -> Command {
+    let mut shell = Command::new("sh");
+    shell.arg("-c").arg(command);
+    shell
+}
+
+fn normalize_custom_command_output(
+    runner_context: &RunnerContextFile,
+    output: CustomCommandProcessOutput,
+) -> RunnerResult {
+    let draft_reply = output.stdout.trim().to_string();
+    let status = if output.exit_code == 0 && !draft_reply.is_empty() {
+        "done"
+    } else {
+        "blocked"
+    };
+    let stderr = if output.exit_code == 0 && draft_reply.is_empty() {
+        "Custom command did not produce a draft reply".to_string()
+    } else if output.exit_code == 0 {
+        output.stderr
+    } else if output.stderr.trim().is_empty() {
+        format!("Custom command exited with code {}", output.exit_code)
+    } else {
+        output.stderr
+    };
+
+    RunnerResult {
+        status: status.to_string(),
+        draft_reply: if status == "done" {
+            draft_reply
+        } else {
+            String::new()
+        },
+        stdout: output.stdout,
         stderr,
         exit_code: output.exit_code,
         context_file_path: runner_context
@@ -454,6 +646,7 @@ fn main() {
             save_local_agent_config,
             run_fake_runner,
             run_codex_runner,
+            run_custom_command_runner,
             list_runner_logs,
             list_pending_drafts,
             create_pending_draft,
@@ -588,7 +781,9 @@ fn db_list_pending_drafts() -> Result<Vec<PendingDraft>, Box<dyn std::error::Err
     Ok(drafts)
 }
 
-fn db_create_pending_draft(input: PendingDraftInput) -> Result<PendingDraft, Box<dyn std::error::Error>> {
+fn db_create_pending_draft(
+    input: PendingDraftInput,
+) -> Result<PendingDraft, Box<dyn std::error::Error>> {
     let connection = open_local_database()?;
     let now = unix_now_millis_i64();
     let id = format!("draft-{}", unix_now_nanos());
@@ -621,7 +816,10 @@ fn db_create_pending_draft(input: PendingDraftInput) -> Result<PendingDraft, Box
     db_get_pending_draft(&connection, &id)
 }
 
-fn db_update_pending_draft_body(id: &str, body: &str) -> Result<PendingDraft, Box<dyn std::error::Error>> {
+fn db_update_pending_draft_body(
+    id: &str,
+    body: &str,
+) -> Result<PendingDraft, Box<dyn std::error::Error>> {
     let connection = open_local_database()?;
     connection.execute(
         "UPDATE pending_drafts SET body = ?1, updated_at = ?2 WHERE id = ?3",
@@ -710,7 +908,9 @@ fn credential_name(profile_id: &str) -> String {
 #[cfg(windows)]
 fn write_token(profile_id: &str, token: &str) -> Result<(), String> {
     use std::{mem, ptr};
-    use windows_sys::Win32::Security::Credentials::{CredWriteW, CREDENTIALW, CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC};
+    use windows_sys::Win32::Security::Credentials::{
+        CredWriteW, CREDENTIALW, CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC,
+    };
 
     let target_name = wide_null(&credential_name(profile_id));
     let mut username = wide_null("agentparty");
@@ -741,7 +941,9 @@ fn write_token(profile_id: &str, token: &str) -> Result<(), String> {
 #[cfg(windows)]
 fn read_token(profile_id: &str) -> Result<String, String> {
     use std::{ptr, slice};
-    use windows_sys::Win32::Security::Credentials::{CredFree, CredReadW, CREDENTIALW, CRED_TYPE_GENERIC};
+    use windows_sys::Win32::Security::Credentials::{
+        CredFree, CredReadW, CREDENTIALW, CRED_TYPE_GENERIC,
+    };
 
     let target_name = wide_null(&credential_name(profile_id));
     let mut credential: *mut CREDENTIALW = ptr::null_mut();
@@ -786,7 +988,8 @@ mod tests {
     #[test]
     fn fake_runner_writes_context_file_and_log_result() {
         let _guard = TEST_MUTEX.lock().expect("test lock poisoned");
-        let root = std::env::temp_dir().join(format!("agentparty-desktop-test-{}", unix_now_millis()));
+        let root =
+            std::env::temp_dir().join(format!("agentparty-desktop-test-{}", unix_now_millis()));
         std::env::set_var("AGENTPARTY_DESKTOP_DATA_DIR", &root);
         let workdir = root.join("workdir");
         let config = LocalAgentConfig {
@@ -794,6 +997,7 @@ mod tests {
             name: "bot".to_string(),
             channel_id: "chan-1".to_string(),
             runner_kind: RunnerKind::Fake,
+            custom_command: None,
             workdir: workdir.to_string_lossy().to_string(),
             workdir_mode: WorkdirMode::ReadOnly,
             sending_policy: SendingPolicy::Draft,
@@ -829,7 +1033,8 @@ mod tests {
     #[test]
     fn codex_runner_normalizes_fake_process_success() {
         let _guard = TEST_MUTEX.lock().expect("test lock poisoned");
-        let root = std::env::temp_dir().join(format!("agentparty-desktop-test-{}", unix_now_millis()));
+        let root =
+            std::env::temp_dir().join(format!("agentparty-desktop-test-{}", unix_now_millis()));
         std::env::set_var("AGENTPARTY_DESKTOP_DATA_DIR", &root);
         let workdir = root.join("workdir");
         let config = LocalAgentConfig {
@@ -837,6 +1042,7 @@ mod tests {
             name: "bot".to_string(),
             channel_id: "chan-1".to_string(),
             runner_kind: RunnerKind::Codex,
+            custom_command: None,
             workdir: workdir.to_string_lossy().to_string(),
             workdir_mode: WorkdirMode::ReadOnly,
             sending_policy: SendingPolicy::Draft,
@@ -876,7 +1082,8 @@ mod tests {
     #[test]
     fn codex_runner_normalizes_fake_process_failure_as_blocked() {
         let _guard = TEST_MUTEX.lock().expect("test lock poisoned");
-        let root = std::env::temp_dir().join(format!("agentparty-desktop-test-{}", unix_now_millis()));
+        let root =
+            std::env::temp_dir().join(format!("agentparty-desktop-test-{}", unix_now_millis()));
         std::env::set_var("AGENTPARTY_DESKTOP_DATA_DIR", &root);
         let workdir = root.join("workdir");
         let config = LocalAgentConfig {
@@ -884,6 +1091,7 @@ mod tests {
             name: "bot".to_string(),
             channel_id: "chan-1".to_string(),
             runner_kind: RunnerKind::Codex,
+            custom_command: None,
             workdir: workdir.to_string_lossy().to_string(),
             workdir_mode: WorkdirMode::ReadOnly,
             sending_policy: SendingPolicy::Draft,
@@ -920,9 +1128,150 @@ mod tests {
     }
 
     #[test]
+    fn custom_command_runner_turns_stdout_into_draft_and_logs_stderr() {
+        let _guard = TEST_MUTEX.lock().expect("test lock poisoned");
+        let root =
+            std::env::temp_dir().join(format!("agentparty-desktop-test-{}", unix_now_millis()));
+        std::env::set_var("AGENTPARTY_DESKTOP_DATA_DIR", &root);
+        let workdir = root.join("workdir");
+        let config = LocalAgentConfig {
+            id: "agent-1".to_string(),
+            name: "bot".to_string(),
+            channel_id: "chan-1".to_string(),
+            runner_kind: RunnerKind::CustomCommand,
+            custom_command: Some("example-runner --flag".to_string()),
+            workdir: workdir.to_string_lossy().to_string(),
+            workdir_mode: WorkdirMode::ReadOnly,
+            sending_policy: SendingPolicy::Draft,
+            created_at: 1,
+            updated_at: 1,
+        };
+        let context = serde_json::json!({
+            "triggeringMessage": {
+                "id": "msg-1",
+                "body": "please help"
+            }
+        });
+
+        let result = run_custom_command_runner_with_executor(config, context, |request| {
+            assert_eq!(request.command, "example-runner --flag");
+            assert!(request.context_file_path.exists());
+            assert_eq!(
+                request.env.get("AP_CONTEXT_FILE").map(String::as_str),
+                Some(request.context_file_path.to_string_lossy().as_ref())
+            );
+            assert_eq!(request.stdin, "please help");
+            Ok(CustomCommandProcessOutput {
+                stdout: "draft from custom\n".to_string(),
+                stderr: "diagnostic only".to_string(),
+                exit_code: 0,
+            })
+        })
+        .expect("custom command runner should normalize success");
+
+        assert_eq!(result.status, "done");
+        assert_eq!(result.draft_reply, "draft from custom");
+        assert_eq!(result.stderr, "diagnostic only");
+        assert_eq!(result.exit_code, 0);
+        let logs = read_runner_logs().expect("runner logs should be readable");
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].draft_reply, "draft from custom");
+        assert_eq!(logs[0].stderr, "diagnostic only");
+        std::env::remove_var("AGENTPARTY_DESKTOP_DATA_DIR");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn custom_command_runner_nonzero_exit_returns_blocked_result() {
+        let _guard = TEST_MUTEX.lock().expect("test lock poisoned");
+        let root =
+            std::env::temp_dir().join(format!("agentparty-desktop-test-{}", unix_now_millis()));
+        std::env::set_var("AGENTPARTY_DESKTOP_DATA_DIR", &root);
+        let workdir = root.join("workdir");
+        let config = LocalAgentConfig {
+            id: "agent-1".to_string(),
+            name: "bot".to_string(),
+            channel_id: "chan-1".to_string(),
+            runner_kind: RunnerKind::CustomCommand,
+            custom_command: Some("failing-runner".to_string()),
+            workdir: workdir.to_string_lossy().to_string(),
+            workdir_mode: WorkdirMode::ReadOnly,
+            sending_policy: SendingPolicy::Draft,
+            created_at: 1,
+            updated_at: 1,
+        };
+        let context = serde_json::json!({
+            "triggeringMessage": {
+                "id": "msg-1",
+                "body": "please help"
+            }
+        });
+
+        let result = run_custom_command_runner_with_executor(config, context, |_request| {
+            Ok(CustomCommandProcessOutput {
+                stdout: "do not post this".to_string(),
+                stderr: "tool failed".to_string(),
+                exit_code: 12,
+            })
+        })
+        .expect("custom command runner should return blocked result");
+
+        assert_eq!(result.status, "blocked");
+        assert_eq!(result.draft_reply, "");
+        assert_eq!(result.stdout, "do not post this");
+        assert_eq!(result.stderr, "tool failed");
+        assert_eq!(result.exit_code, 12);
+        let logs = read_runner_logs().expect("runner logs should be readable");
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].status, "blocked");
+        std::env::remove_var("AGENTPARTY_DESKTOP_DATA_DIR");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn custom_command_runner_missing_command_returns_blocked_result() {
+        let _guard = TEST_MUTEX.lock().expect("test lock poisoned");
+        let root =
+            std::env::temp_dir().join(format!("agentparty-desktop-test-{}", unix_now_millis()));
+        std::env::set_var("AGENTPARTY_DESKTOP_DATA_DIR", &root);
+        let workdir = root.join("workdir");
+        let config = LocalAgentConfig {
+            id: "agent-1".to_string(),
+            name: "bot".to_string(),
+            channel_id: "chan-1".to_string(),
+            runner_kind: RunnerKind::CustomCommand,
+            custom_command: None,
+            workdir: workdir.to_string_lossy().to_string(),
+            workdir_mode: WorkdirMode::ReadOnly,
+            sending_policy: SendingPolicy::Draft,
+            created_at: 1,
+            updated_at: 1,
+        };
+        let context = serde_json::json!({
+            "triggeringMessage": {
+                "id": "msg-1",
+                "body": "please help"
+            }
+        });
+
+        let result = run_custom_command_runner_with_executor(config, context, |_request| {
+            panic!("missing custom command should not execute");
+        })
+        .expect("custom command runner should return blocked result");
+
+        assert_eq!(result.status, "blocked");
+        assert_eq!(result.draft_reply, "");
+        assert_eq!(result.stderr, "Custom command is required");
+        assert_eq!(result.exit_code, 1);
+        std::env::remove_var("AGENTPARTY_DESKTOP_DATA_DIR");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn pending_drafts_persist_in_local_sqlite() {
         let _guard = TEST_MUTEX.lock().expect("test lock poisoned");
-        let root = std::env::temp_dir().join(format!("agentparty-desktop-test-{}", unix_now_millis()));
+        let root =
+            std::env::temp_dir().join(format!("agentparty-desktop-test-{}", unix_now_millis()));
         std::env::set_var("AGENTPARTY_DESKTOP_DATA_DIR", &root);
 
         let draft = create_pending_draft(PendingDraftInput {

@@ -7,6 +7,7 @@ const config: LocalAgentConfig = {
   name: "bot",
   channelId: "chan-1",
   runnerKind: "fake",
+  customCommand: null,
   workdir: "D:\\Workspace\\agent",
   workdirMode: "read-only",
   sendingPolicy: "draft",
@@ -36,5 +37,19 @@ describe("TauriRunnerService", () => {
     await service.runRunner(codexConfig, context);
 
     expect(invoke).toHaveBeenCalledWith("run_codex_runner", { agentConfig: codexConfig, context });
+  });
+
+  it("dispatches custom command configs to the custom command runner command", async () => {
+    const invoke = vi.fn().mockResolvedValue({ status: "done" });
+    const service = new TauriRunnerService(invoke);
+    const customConfig = {
+      ...config,
+      runnerKind: "custom-command" as const,
+      customCommand: "reasonix run --max-steps 8",
+    };
+
+    await service.runRunner(customConfig, context);
+
+    expect(invoke).toHaveBeenCalledWith("run_custom_command_runner", { agentConfig: customConfig, context });
   });
 });

@@ -330,6 +330,7 @@ function AgentConfigPanel({
     name: "bot",
     channelId: connectedChannelId,
     runnerKind: "fake",
+    customCommand: null,
     workdir: "D:\\Workspace\\agentparty-fake-runner",
     workdirMode: "read-only",
     sendingPolicy: "draft",
@@ -361,7 +362,11 @@ function AgentConfigPanel({
         <select value={input.runnerKind} onChange={(event) => setInput({ ...input, runnerKind: event.target.value as LocalAgentConfigInput["runnerKind"] })}>
           <option value="fake">Fake</option>
           <option value="codex">Codex</option>
+          <option value="custom-command">Custom command</option>
         </select>
+        {input.runnerKind === "custom-command" ? (
+          <input value={input.customCommand ?? ""} onChange={(event) => setInput({ ...input, customCommand: event.target.value })} placeholder="Command, e.g. agent --print --mode=ask" required />
+        ) : null}
         <select value={input.sendingPolicy} onChange={(event) => setInput({ ...input, sendingPolicy: event.target.value as LocalAgentConfigInput["sendingPolicy"] })}>
           <option value="draft">Draft</option>
           <option value="auto-send">Auto-send</option>

@@ -8,6 +8,7 @@ describe("agent config persistence", () => {
         name: "bot",
         channelId: "chan-1",
         runnerKind: "fake",
+        customCommand: null,
         workdir: "D:\\Workspace\\agent",
         workdirMode: "read-only",
         sendingPolicy: "draft",
@@ -20,12 +21,33 @@ describe("agent config persistence", () => {
       name: "bot",
       channelId: "chan-1",
       runnerKind: "fake",
+      customCommand: null,
       workdir: "D:\\Workspace\\agent",
       workdirMode: "read-only",
       sendingPolicy: "draft",
       createdAt: 1000,
       updatedAt: 1000,
     });
+  });
+
+  it("creates local custom command agent configs with a trimmed command", () => {
+    const config = toPersistedAgentConfig(
+      {
+        name: "cursor",
+        channelId: "chan-1",
+        runnerKind: "custom-command",
+        customCommand: "  agent --print --mode=ask  ",
+        workdir: "D:\\Workspace\\agent",
+        workdirMode: "read-only",
+        sendingPolicy: "draft",
+      },
+      1000,
+    );
+
+    expect(config).toEqual(expect.objectContaining({
+      runnerKind: "custom-command",
+      customCommand: "agent --print --mode=ask",
+    }));
   });
 
   it("lists saved configs without changing their created time on update", async () => {
@@ -35,6 +57,7 @@ describe("agent config persistence", () => {
       name: "bot",
       channelId: "chan-1",
       runnerKind: "fake",
+      customCommand: null,
       workdir: "D:\\Workspace\\agent",
       workdirMode: "read-only",
       sendingPolicy: "draft",
@@ -56,6 +79,7 @@ describe("agent config persistence", () => {
       name: "reader-a",
       channelId: "chan-1",
       runnerKind: "fake",
+      customCommand: null,
       workdir: "D:\\Workspace\\shared",
       workdirMode: "read-only",
       sendingPolicy: "draft",
@@ -64,6 +88,7 @@ describe("agent config persistence", () => {
       name: "reader-b",
       channelId: "chan-1",
       runnerKind: "codex",
+      customCommand: null,
       workdir: "D:\\Workspace\\shared\\",
       workdirMode: "read-only",
       sendingPolicy: "draft",
@@ -77,6 +102,7 @@ describe("agent config persistence", () => {
       name: "writer-a",
       channelId: "chan-1",
       runnerKind: "fake",
+      customCommand: null,
       workdir: "D:\\Workspace\\shared",
       workdirMode: "writable",
       sendingPolicy: "draft",
@@ -85,6 +111,7 @@ describe("agent config persistence", () => {
       name: "writer-b",
       channelId: "chan-1",
       runnerKind: "codex",
+      customCommand: null,
       workdir: "d:\\workspace\\shared\\",
       workdirMode: "writable",
       sendingPolicy: "draft",

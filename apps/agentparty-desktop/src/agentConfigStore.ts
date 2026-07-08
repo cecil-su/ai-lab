@@ -13,6 +13,7 @@ export function toPersistedAgentConfig(input: LocalAgentConfigInput, now = Date.
     name: input.name.trim(),
     channelId: input.channelId.trim(),
     runnerKind: input.runnerKind,
+    customCommand: input.customCommand?.trim() || null,
     workdir: input.workdir.trim(),
     workdirMode: input.workdirMode,
     sendingPolicy: input.sendingPolicy,

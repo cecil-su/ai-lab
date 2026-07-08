@@ -39,6 +39,7 @@ const config: LocalAgentConfig = {
   name: "bot",
   channelId: "chan-1",
   runnerKind: "fake",
+  customCommand: null,
   workdir: "D:\\Workspace\\agent",
   workdirMode: "read-only",
   sendingPolicy: "draft",
@@ -179,6 +180,28 @@ describe("LocalRelay", () => {
 
     expect(protocol.posts).toEqual([{ body: "Fake runner bot saw: please help", replyTo: "msg-2" }]);
     await expect(pendingQueue.listPendingDrafts()).resolves.toEqual([]);
+  });
+
+  it("creates pending drafts from custom command runner results", async () => {
+    await relay.start({
+      profile,
+      token: "token",
+      config: {
+        ...config,
+        runnerKind: "custom-command",
+        customCommand: "agent --print --mode=ask",
+      },
+      recentMessages: [],
+      lastSequence: 1,
+    });
+    await relay.handleEvent({ type: "Message", payload: message(2, "please help") });
+
+    await expect(pendingQueue.listPendingDrafts()).resolves.toEqual([
+      expect.objectContaining({
+        status: "pending",
+        body: expect.stringContaining("Custom command bot"),
+      }),
+    ]);
   });
 
   it("creates blocked pending items when the runner fails", async () => {

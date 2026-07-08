@@ -89,7 +89,7 @@ export type ServerProfileInput = {
   token: string;
 };
 
-export type RunnerKind = "fake" | "codex";
+export type RunnerKind = "fake" | "codex" | "custom-command";
 export type WorkdirMode = "read-only" | "writable";
 export type SendingPolicy = "draft" | "auto-send";
 
@@ -98,6 +98,7 @@ export type LocalAgentConfig = {
   name: string;
   channelId: string;
   runnerKind: RunnerKind;
+  customCommand: string | null;
   workdir: string;
   workdirMode: WorkdirMode;
   sendingPolicy: SendingPolicy;
@@ -110,6 +111,7 @@ export type LocalAgentConfigInput = {
   name: string;
   channelId: string;
   runnerKind: RunnerKind;
+  customCommand: string | null;
   workdir: string;
   workdirMode: WorkdirMode;
   sendingPolicy: SendingPolicy;
