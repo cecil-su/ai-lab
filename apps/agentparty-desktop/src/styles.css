@@ -10,6 +10,7 @@ body {
 
 button,
 input,
+select,
 textarea {
   font: inherit;
 }
@@ -46,6 +47,7 @@ h1 {
 }
 
 input,
+select,
 textarea {
   width: 100%;
   box-sizing: border-box;
@@ -77,6 +79,46 @@ button:disabled {
 .profile-list {
   display: grid;
   gap: 8px;
+}
+
+.agent-panel {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid #d8dee7;
+  padding-top: 16px;
+}
+
+.panel-title,
+.agent-row,
+.stop-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-row {
+  justify-content: space-between;
+  border: 1px solid #d8dee7;
+  border-radius: 6px;
+  background: #f8fafc;
+  padding: 10px;
+}
+
+.agent-row div {
+  display: grid;
+  gap: 3px;
+}
+
+.agent-row small,
+.relay-status,
+.relay-log {
+  color: #667085;
+  font-size: 12px;
+}
+
+.stop-button {
+  justify-content: center;
+  background: #344054;
 }
 
 .profile-button {
@@ -211,6 +253,12 @@ button:disabled {
   background: #fff0f0;
   color: #a40000;
   padding: 10px 18px;
+}
+
+.error.compact {
+  border: 1px solid #f2c4c4;
+  border-radius: 6px;
+  padding: 8px;
 }
 
 @media (max-width: 820px) {

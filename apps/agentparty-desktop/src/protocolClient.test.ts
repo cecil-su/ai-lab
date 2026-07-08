@@ -50,6 +50,25 @@ describe("HttpProtocolClient", () => {
 
     await expect(client.postMessage(profile, "token", { body: "hello", mentions: [], reply_to_message_id: null })).resolves.toEqual(message);
   });
+
+  it("posts participant status for relay wakeability", async () => {
+    const client = new HttpProtocolClient(async (input, init) => {
+      expect(String(input)).toContain("/api/channels/chan-1/status");
+      expect(init?.method).toBe("POST");
+      expect(init?.body).toBe(JSON.stringify({ state: "waiting" }));
+      return jsonResponse({
+        channel_id: "chan-1",
+        sequence: 1,
+        participant: message.sender,
+        state: "waiting",
+        created_at: 1,
+      }, 201);
+    });
+
+    await expect(client.postStatus(profile, "token", { state: "waiting" })).resolves.toEqual(
+      expect.objectContaining({ state: "waiting" }),
+    );
+  });
 });
 
 function jsonResponse(body: unknown, status = 200): Response {

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { MemoryProfileStore } from "./profileStore";
-import type { ChannelEvent, ChannelMessage, ServerProfile, TokenMetadata } from "./types";
+import type { ChannelEvent, ChannelMessage, ServerProfile, StatusUpdate, TokenMetadata } from "./types";
 import type { ChannelSubscription, ProtocolClient } from "./protocolClient";
 import { WorkbenchModel } from "./workbenchModel";
 
@@ -41,6 +41,16 @@ class FakeProtocolClient implements ProtocolClient {
   async postMessage(_profile: ServerProfile, _token: string, request: { body: string; reply_to_message_id: string | null }) {
     this.posted.push({ body: request.body, replyTo: request.reply_to_message_id });
     return message(10 + this.posted.length, request.body, request.reply_to_message_id);
+  }
+
+  async postStatus(): Promise<StatusUpdate> {
+    return {
+      channel_id: "chan-1",
+      sequence: 1,
+      participant: human,
+      state: "waiting",
+      created_at: 1,
+    };
   }
 
   watchChannel(_profile: ServerProfile, _token: string, onEvent: (event: ChannelEvent) => void, onDisconnect: () => void): ChannelSubscription {

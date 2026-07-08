@@ -24,6 +24,10 @@ export type PostMessageRequest = {
   reply_to_message_id: string | null;
 };
 
+export type PostStatusRequest = {
+  state: ParticipantStatusState;
+};
+
 export type ChannelHistoryResponse = {
   events: ChannelEvent[];
   last_sequence: number;
@@ -82,4 +86,55 @@ export type ServerProfileInput = {
   serverUrl: string;
   channelId: string;
   token: string;
+};
+
+export type RunnerKind = "fake";
+export type SendingPolicy = "draft" | "auto-send";
+
+export type LocalAgentConfig = {
+  id: string;
+  name: string;
+  channelId: string;
+  runnerKind: RunnerKind;
+  workdir: string;
+  sendingPolicy: SendingPolicy;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type LocalAgentConfigInput = {
+  id?: string;
+  name: string;
+  channelId: string;
+  runnerKind: RunnerKind;
+  workdir: string;
+  sendingPolicy: SendingPolicy;
+};
+
+export type RunnerContext = {
+  channel: {
+    id: string;
+  };
+  triggeringMessage: ChannelMessage;
+  sender: TokenMetadata;
+  replyTarget: ChannelMessage | null;
+  mentions: string[];
+  recentMessages: ChannelMessage[];
+  protocolReminder: string;
+};
+
+export type RunnerResult = {
+  status: "done" | "blocked";
+  draftReply: string;
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  contextFilePath: string;
+};
+
+export type RunnerLogEntry = RunnerResult & {
+  id: string;
+  agentConfigId: string;
+  triggeringMessageId: string;
+  createdAt: number;
 };

@@ -1,12 +1,17 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { Lock, Plug, Reply, Send, ShieldAlert, ShieldCheck, WifiOff } from "lucide-react";
+import { Lock, Plug, Reply, Send, ShieldAlert, ShieldCheck, Square, Bot, Play, WifiOff } from "lucide-react";
+import { MemoryAgentConfigStore, TauriAgentConfigStore } from "./agentConfigStore";
+import { LocalRelay, type LocalRelaySnapshot } from "./localRelay";
 import { HttpProtocolClient } from "./protocolClient";
 import { classifyServerUrl, MemoryProfileStore, TauriProfileStore } from "./profileStore";
-import type { ChannelMessage, ServerProfile, ServerProfileInput } from "./types";
+import { MemoryRunnerService, TauriRunnerService } from "./runnerService";
+import type { ChannelMessage, LocalAgentConfig, LocalAgentConfigInput, ServerProfile, ServerProfileInput } from "./types";
 import { WorkbenchModel, type WorkbenchSnapshot } from "./workbenchModel";
 import "./styles.css";
 
 const fallbackStore = new MemoryProfileStore();
+const fallbackAgentStore = new MemoryAgentConfigStore();
+const fallbackRunner = new MemoryRunnerService();
 
 function createProfileStore() {
   try {
@@ -16,9 +21,29 @@ function createProfileStore() {
   }
 }
 
+function createAgentConfigStore() {
+  try {
+    return new TauriAgentConfigStore();
+  } catch {
+    return fallbackAgentStore;
+  }
+}
+
+function createRunnerService() {
+  try {
+    return new TauriRunnerService();
+  } catch {
+    return fallbackRunner;
+  }
+}
+
 export function App() {
   const profileStore = useMemo(createProfileStore, []);
+  const agentConfigStore = useMemo(createAgentConfigStore, []);
+  const runnerService = useMemo(createRunnerService, []);
+  const protocol = useMemo(() => new HttpProtocolClient(), []);
   const [profiles, setProfiles] = useState<ServerProfile[]>([]);
+  const [agentConfigs, setAgentConfigs] = useState<LocalAgentConfig[]>([]);
   const [snapshot, setSnapshot] = useState<WorkbenchSnapshot>({
     connectionState: "disconnected",
     profile: null,
@@ -27,16 +52,42 @@ export function App() {
     lastSequence: 0,
     error: null,
   });
-  const model = useMemo(() => new WorkbenchModel(profileStore, new HttpProtocolClient(), setSnapshot), [profileStore]);
+  const [relaySnapshot, setRelaySnapshot] = useState<LocalRelaySnapshot>({
+    state: "stopped",
+    processedMessageIds: [],
+    lastResult: null,
+    error: null,
+  });
+  const model = useMemo(() => new WorkbenchModel(profileStore, protocol, setSnapshot), [profileStore, protocol]);
+  const relay = useMemo(() => new LocalRelay(protocol, runnerService, setRelaySnapshot), [protocol, runnerService]);
 
   useEffect(() => {
     void profileStore.listProfiles().then(setProfiles);
-  }, [profileStore]);
+    void agentConfigStore.listAgentConfigs().then(setAgentConfigs);
+  }, [agentConfigStore, profileStore]);
 
   async function saveProfile(input: ServerProfileInput) {
     const profile = await profileStore.saveProfile(input);
     setProfiles(await profileStore.listProfiles());
     await model.connect(profile);
+  }
+
+  async function saveAgentConfig(input: LocalAgentConfigInput) {
+    const config = await agentConfigStore.saveAgentConfig(input);
+    setAgentConfigs(await agentConfigStore.listAgentConfigs());
+    return config;
+  }
+
+  async function startRelay(config: LocalAgentConfig) {
+    if (!snapshot.profile) return;
+    const token = await profileStore.getToken(snapshot.profile.id);
+    await relay.start({
+      profile: snapshot.profile,
+      token,
+      config,
+      recentMessages: snapshot.messages,
+      lastSequence: snapshot.lastSequence,
+    });
   }
 
   return (
@@ -47,6 +98,15 @@ export function App() {
           <p className="muted">Desktop workbench</p>
         </div>
         <ProfileForm onSave={saveProfile} />
+        <AgentConfigPanel
+          configs={agentConfigs}
+          connectedChannelId={snapshot.profile?.channelId ?? ""}
+          relay={relaySnapshot}
+          onSave={saveAgentConfig}
+          onStart={startRelay}
+          onStop={() => void relay.stop()}
+          disabled={!snapshot.profile}
+        />
         <div className="profile-list">
           {profiles.map((profile) => (
             <button key={profile.id} className="profile-button" onClick={() => void model.connect(profile)}>
@@ -95,6 +155,79 @@ function ProfileForm({ onSave }: { onSave: (input: ServerProfileInput) => Promis
       {security ? <SecurityLabel security={security} /> : null}
       <button type="submit">Save and connect</button>
     </form>
+  );
+}
+
+function AgentConfigPanel({
+  configs,
+  connectedChannelId,
+  relay,
+  disabled,
+  onSave,
+  onStart,
+  onStop,
+}: {
+  configs: LocalAgentConfig[];
+  connectedChannelId: string;
+  relay: LocalRelaySnapshot;
+  disabled: boolean;
+  onSave: (input: LocalAgentConfigInput) => Promise<LocalAgentConfig>;
+  onStart: (config: LocalAgentConfig) => Promise<void>;
+  onStop: () => void;
+}) {
+  const [input, setInput] = useState<LocalAgentConfigInput>({
+    name: "bot",
+    channelId: connectedChannelId,
+    runnerKind: "fake",
+    workdir: "D:\\Workspace\\agentparty-fake-runner",
+    sendingPolicy: "draft",
+  });
+
+  useEffect(() => {
+    if (connectedChannelId) setInput((current) => ({ ...current, channelId: connectedChannelId }));
+  }, [connectedChannelId]);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    await onSave(input);
+  }
+
+  return (
+    <section className="agent-panel">
+      <div className="panel-title">
+        <Bot size={18} />
+        <span>Local relay</span>
+      </div>
+      <form className="profile-form" onSubmit={submit}>
+        <input value={input.name} onChange={(event) => setInput({ ...input, name: event.target.value })} placeholder="Agent name" required />
+        <input value={input.channelId} onChange={(event) => setInput({ ...input, channelId: event.target.value })} placeholder="Channel ID" required />
+        <input value={input.workdir} onChange={(event) => setInput({ ...input, workdir: event.target.value })} placeholder="Workdir" required />
+        <select value={input.sendingPolicy} onChange={(event) => setInput({ ...input, sendingPolicy: event.target.value as LocalAgentConfigInput["sendingPolicy"] })}>
+          <option value="draft">Draft</option>
+          <option value="auto-send">Auto-send</option>
+        </select>
+        <button type="submit">Save agent</button>
+      </form>
+      <div className="profile-list">
+        {configs.map((config) => (
+          <div className="agent-row" key={config.id}>
+            <div>
+              <strong>{config.name}</strong>
+              <small>{config.runnerKind} · {config.sendingPolicy}</small>
+            </div>
+            <button className="icon-button" disabled={disabled || relay.state === "running"} onClick={() => void onStart(config)} title="Start relay">
+              <Play size={16} />
+            </button>
+          </div>
+        ))}
+      </div>
+      <button className="stop-button" disabled={relay.state === "stopped"} onClick={onStop} type="button">
+        <Square size={14} /> Stop relay
+      </button>
+      <div className="relay-status">Relay: {relay.state}</div>
+      {relay.lastResult ? <div className="relay-log">Last: {relay.lastResult.contextFilePath}</div> : null}
+      {relay.error ? <div className="error compact">{relay.error}</div> : null}
+    </section>
   );
 }
 

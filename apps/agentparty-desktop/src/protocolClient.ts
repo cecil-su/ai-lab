@@ -3,13 +3,16 @@ import type {
   ChannelHistoryResponse,
   ChannelMessage,
   PostMessageRequest,
+  PostStatusRequest,
   ServerProfile,
+  StatusUpdate,
   WebSocketFrame,
 } from "./types";
 
 export interface ProtocolClient {
   loadHistory(profile: ServerProfile, token: string, afterSequence?: number): Promise<ChannelHistoryResponse>;
   postMessage(profile: ServerProfile, token: string, request: PostMessageRequest): Promise<ChannelMessage>;
+  postStatus(profile: ServerProfile, token: string, request: PostStatusRequest): Promise<StatusUpdate>;
   watchChannel(profile: ServerProfile, token: string, onEvent: (event: ChannelEvent) => void, onDisconnect: () => void): ChannelSubscription;
 }
 
@@ -32,6 +35,14 @@ export class HttpProtocolClient implements ProtocolClient {
   async postMessage(profile: ServerProfile, token: string, request: PostMessageRequest): Promise<ChannelMessage> {
     const url = apiUrl(profile, `/api/channels/${encodeURIComponent(profile.channelId)}/messages`);
     return this.request<ChannelMessage>(url, token, {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+  }
+
+  async postStatus(profile: ServerProfile, token: string, request: PostStatusRequest): Promise<StatusUpdate> {
+    const url = apiUrl(profile, `/api/channels/${encodeURIComponent(profile.channelId)}/status`);
+    return this.request<StatusUpdate>(url, token, {
       method: "POST",
       body: JSON.stringify(request),
     });
