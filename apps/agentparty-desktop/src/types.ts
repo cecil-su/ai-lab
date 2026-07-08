@@ -26,6 +26,7 @@ export type PostMessageRequest = {
 
 export type PostStatusRequest = {
   state: ParticipantStatusState;
+  scope: string | null;
 };
 
 export type ChannelHistoryResponse = {
@@ -54,6 +55,7 @@ export type StatusUpdate = {
   sequence: number;
   participant: TokenMetadata;
   state: ParticipantStatusState;
+  scope: string | null;
   created_at: number;
 };
 
@@ -89,6 +91,7 @@ export type ServerProfileInput = {
 };
 
 export type RunnerKind = "fake" | "codex";
+export type WorkdirMode = "read-only" | "writable";
 export type SendingPolicy = "draft" | "auto-send";
 
 export type LocalAgentConfig = {
@@ -97,6 +100,7 @@ export type LocalAgentConfig = {
   channelId: string;
   runnerKind: RunnerKind;
   workdir: string;
+  workdirMode: WorkdirMode;
   sendingPolicy: SendingPolicy;
   createdAt: number;
   updatedAt: number;
@@ -108,6 +112,7 @@ export type LocalAgentConfigInput = {
   channelId: string;
   runnerKind: RunnerKind;
   workdir: string;
+  workdirMode: WorkdirMode;
   sendingPolicy: SendingPolicy;
 };
 

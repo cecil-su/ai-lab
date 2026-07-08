@@ -31,7 +31,7 @@ export type AuthenticatedTokenResponse = { token: TokenMetadata, };
 
 export type PostMessageRequest = { body: string, mentions: Array<string>, reply_to_message_id: string | null, };
 
-export type PostStatusRequest = { state: ParticipantStatusState, };
+export type PostStatusRequest = { state: ParticipantStatusState, scope: string | null, };
 
 export type ChannelHistoryResponse = { events: Array<ChannelEvent>, last_sequence: number, };
 
@@ -41,7 +41,7 @@ export type ChannelEvent = { "type": "Message", "payload": ChannelMessage } | { 
 
 export type ChannelMessage = { id: string, channel_id: string, sequence: number, sender: TokenMetadata, body: string, mentions: Array<string>, reply_to_message_id: string | null, created_at: number, };
 
-export type StatusUpdate = { channel_id: string, sequence: number, participant: TokenMetadata, state: ParticipantStatusState, created_at: number, };
+export type StatusUpdate = { channel_id: string, sequence: number, participant: TokenMetadata, state: ParticipantStatusState, scope: string | null, created_at: number, };
 
 export type PresenceUpdate = { channel_id: string, participant: TokenMetadata, state: PresenceState, };
 

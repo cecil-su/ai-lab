@@ -55,18 +55,19 @@ describe("HttpProtocolClient", () => {
     const client = new HttpProtocolClient(async (input, init) => {
       expect(String(input)).toContain("/api/channels/chan-1/status");
       expect(init?.method).toBe("POST");
-      expect(init?.body).toBe(JSON.stringify({ state: "waiting" }));
+      expect(init?.body).toBe(JSON.stringify({ state: "working", scope: "apps/agentparty-desktop" }));
       return jsonResponse({
         channel_id: "chan-1",
         sequence: 1,
         participant: message.sender,
-        state: "waiting",
+        state: "working",
+        scope: "apps/agentparty-desktop",
         created_at: 1,
       }, 201);
     });
 
-    await expect(client.postStatus(profile, "token", { state: "waiting" })).resolves.toEqual(
-      expect.objectContaining({ state: "waiting" }),
+    await expect(client.postStatus(profile, "token", { state: "working", scope: "apps/agentparty-desktop" })).resolves.toEqual(
+      expect.objectContaining({ state: "working", scope: "apps/agentparty-desktop" }),
     );
   });
 });

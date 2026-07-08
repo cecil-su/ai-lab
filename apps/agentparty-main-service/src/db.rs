@@ -275,6 +275,7 @@ pub fn append_status_event(
     channel_id: &str,
     participant: TokenMetadata,
     state: ParticipantStatusState,
+    scope: Option<String>,
 ) -> anyhow::Result<ChannelEvent> {
     let connection = open_database(path)?;
     ensure_channel_exists(&connection, channel_id)?;
@@ -287,6 +288,14 @@ pub fn append_status_event(
             sequence,
             participant,
             state,
+            scope: scope.and_then(|scope| {
+                let scope = scope.trim().to_string();
+                if scope.is_empty() {
+                    None
+                } else {
+                    Some(scope)
+                }
+            }),
             created_at,
         });
         insert_event(

@@ -323,6 +323,7 @@ async fn post_channel_status(
         &channel_id,
         token_metadata(token),
         payload.state,
+        payload.scope,
     ) {
         Ok(ChannelEvent::Status(status)) => {
             let _ = state.events.send(WebSocketFrame::Status(status.clone()));
@@ -642,6 +643,7 @@ async fn handle_client_ws_frame(
             channel_id,
             self_token.clone(),
             payload.state,
+            payload.scope,
         )?,
     };
     let frame = frame_from_event(event);

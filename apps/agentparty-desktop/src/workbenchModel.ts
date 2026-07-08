@@ -1,4 +1,4 @@
-import type { ChannelEvent, ChannelMessage, PostMessageRequest, PresenceUpdate, ServerProfile } from "./types";
+import type { ChannelEvent, ChannelMessage, PostMessageRequest, PresenceUpdate, ServerProfile, StatusUpdate } from "./types";
 import type { ChannelSubscription, ProtocolClient } from "./protocolClient";
 import type { ProfileStore } from "./profileStore";
 
@@ -12,6 +12,7 @@ export type ChannelWorkbenchSnapshot = {
   composerBody: string;
   composerMentions: string;
   presence: PresenceUpdate[];
+  statuses: StatusUpdate[];
   lastSequence: number;
   error: string | null;
   unreadCount: number;
@@ -25,6 +26,7 @@ export type WorkbenchSnapshot = {
   composerBody: string;
   composerMentions: string;
   presence: PresenceUpdate[];
+  statuses: StatusUpdate[];
   lastSequence: number;
   error: string | null;
   activeProfileId: string | null;
@@ -44,6 +46,7 @@ const EMPTY_ACTIVE_SNAPSHOT = {
   composerBody: "",
   composerMentions: "",
   presence: [],
+  statuses: [],
   lastSequence: 0,
   error: null,
 };
@@ -182,9 +185,8 @@ export class WorkbenchModel {
         this.upsertMessage(profileId, event.payload, countUnread);
       } else if (event.type === "Presence") {
         this.upsertPresence(profileId, event.payload);
-      } else if ("sequence" in event.payload) {
-        const state = this.requireChannel(profileId);
-        this.setChannel(profileId, { ...state, lastSequence: Math.max(state.lastSequence, event.payload.sequence) });
+      } else if (event.type === "Status") {
+        this.upsertStatus(profileId, event.payload);
       }
     }
   }
@@ -214,6 +216,18 @@ export class WorkbenchModel {
     nextPresence.push(presence);
     nextPresence.sort((a, b) => a.participant.owner_label.localeCompare(b.participant.owner_label));
     this.setChannel(profileId, { ...state, presence: nextPresence });
+  }
+
+  private upsertStatus(profileId: string, status: StatusUpdate): void {
+    const state = this.requireChannel(profileId);
+    const statuses = state.statuses.filter((item) => item.participant.id !== status.participant.id);
+    statuses.push(status);
+    statuses.sort((a, b) => a.participant.owner_label.localeCompare(b.participant.owner_label));
+    this.setChannel(profileId, {
+      ...state,
+      statuses,
+      lastSequence: Math.max(state.lastSequence, status.sequence),
+    });
   }
 
   private requireChannel(profileId: string): ChannelState {
@@ -251,6 +265,7 @@ function makeChannelState(
     composerBody: previous?.composerBody ?? "",
     composerMentions: previous?.composerMentions ?? "",
     presence: previous?.presence ?? [],
+    statuses: previous?.statuses ?? [],
     lastSequence: previous?.lastSequence ?? 0,
     error: previous?.error ?? null,
     unreadCount: previous?.unreadCount ?? 0,
@@ -269,6 +284,7 @@ function channelToActiveSnapshot(channel: ChannelWorkbenchSnapshot) {
     composerBody: channel.composerBody,
     composerMentions: channel.composerMentions,
     presence: [...channel.presence],
+    statuses: [...channel.statuses],
     lastSequence: channel.lastSequence,
     error: channel.error,
   };
@@ -283,6 +299,7 @@ function copyChannelSnapshot(channel: ChannelWorkbenchSnapshot): ChannelWorkbenc
     composerBody: channel.composerBody,
     composerMentions: channel.composerMentions,
     presence: [...channel.presence],
+    statuses: [...channel.statuses],
     lastSequence: channel.lastSequence,
     error: channel.error,
     unreadCount: channel.unreadCount,

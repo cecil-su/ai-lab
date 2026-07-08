@@ -7,7 +7,7 @@ import { MemoryPendingQueueStore, TauriPendingQueueStore } from "./pendingQueueS
 import { HttpProtocolClient } from "./protocolClient";
 import { classifyServerUrl, MemoryProfileStore, TauriProfileStore } from "./profileStore";
 import { MemoryRunnerService, TauriRunnerService } from "./runnerService";
-import type { ChannelMessage, LocalAgentConfig, LocalAgentConfigInput, PendingDraft, ServerProfile, ServerProfileInput } from "./types";
+import type { ChannelMessage, LocalAgentConfig, LocalAgentConfigInput, ParticipantStatusState, PendingDraft, ServerProfile, ServerProfileInput } from "./types";
 import { WorkbenchModel, type WorkbenchSnapshot } from "./workbenchModel";
 import "./styles.css";
 
@@ -56,6 +56,7 @@ export function App() {
   const protocol = useMemo(() => new HttpProtocolClient(), []);
   const [profiles, setProfiles] = useState<ServerProfile[]>([]);
   const [agentConfigs, setAgentConfigs] = useState<LocalAgentConfig[]>([]);
+  const [agentConfigError, setAgentConfigError] = useState<string | null>(null);
   const [pendingDrafts, setPendingDrafts] = useState<PendingDraft[]>([]);
   const [selectedDraftId, setSelectedDraftId] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState<WorkbenchSnapshot>({
@@ -66,6 +67,7 @@ export function App() {
     composerBody: "",
     composerMentions: "",
     presence: [],
+    statuses: [],
     lastSequence: 0,
     error: null,
     activeProfileId: null,
@@ -105,14 +107,20 @@ export function App() {
 
   async function startRelay(config: LocalAgentConfig) {
     if (!snapshot.profile) return;
+    setAgentConfigError(null);
     const token = await profileStore.getToken(snapshot.profile.id);
-    await relay.start({
-      profile: snapshot.profile,
-      token,
-      config,
-      recentMessages: snapshot.messages,
-      lastSequence: snapshot.lastSequence,
-    });
+    try {
+      await relay.start({
+        profile: snapshot.profile,
+        token,
+        config,
+        knownConfigs: agentConfigs,
+        recentMessages: snapshot.messages,
+        lastSequence: snapshot.lastSequence,
+      });
+    } catch (error) {
+      setAgentConfigError(error instanceof Error ? error.message : String(error));
+    }
   }
 
   async function editDraft(id: string, body: string) {
@@ -149,9 +157,11 @@ export function App() {
           configs={agentConfigs}
           connectedChannelId={snapshot.profile?.channelId ?? ""}
           relay={relaySnapshot}
+          error={agentConfigError}
           onSave={saveAgentConfig}
           onStart={startRelay}
           onStop={() => void relay.stop()}
+          onPostStatus={(state, scope) => relay.postStatus(state, scope)}
           disabled={!snapshot.profile}
         />
         <div className="profile-list">
@@ -176,7 +186,7 @@ export function App() {
       </aside>
       <section className="workbench">
         <header className="toolbar">
-          <ConnectionBadge profile={snapshot.profile} state={snapshot.connectionState} presenceCount={snapshot.presence.filter((item) => item.state === "online").length} />
+          <ConnectionBadge profile={snapshot.profile} state={snapshot.connectionState} presenceCount={snapshot.presence.filter((item) => item.state === "online").length} statuses={snapshot.statuses} />
           <button className="icon-button" disabled={!snapshot.profile} onClick={() => void model.catchUp()} title="Catch up">
             <Plug size={18} />
           </button>
@@ -298,24 +308,30 @@ function AgentConfigPanel({
   configs,
   connectedChannelId,
   relay,
+  error,
   disabled,
   onSave,
   onStart,
   onStop,
+  onPostStatus,
 }: {
   configs: LocalAgentConfig[];
   connectedChannelId: string;
   relay: LocalRelaySnapshot;
+  error: string | null;
   disabled: boolean;
   onSave: (input: LocalAgentConfigInput) => Promise<LocalAgentConfig>;
   onStart: (config: LocalAgentConfig) => Promise<void>;
   onStop: () => void;
+  onPostStatus: (state: ParticipantStatusState, scope?: string) => Promise<void>;
 }) {
+  const [statusScope, setStatusScope] = useState("");
   const [input, setInput] = useState<LocalAgentConfigInput>({
     name: "bot",
     channelId: connectedChannelId,
     runnerKind: "fake",
     workdir: "D:\\Workspace\\agentparty-fake-runner",
+    workdirMode: "read-only",
     sendingPolicy: "draft",
   });
 
@@ -338,6 +354,10 @@ function AgentConfigPanel({
         <input value={input.name} onChange={(event) => setInput({ ...input, name: event.target.value })} placeholder="Agent name" required />
         <input value={input.channelId} onChange={(event) => setInput({ ...input, channelId: event.target.value })} placeholder="Channel ID" required />
         <input value={input.workdir} onChange={(event) => setInput({ ...input, workdir: event.target.value })} placeholder="Workdir" required />
+        <select value={input.workdirMode} onChange={(event) => setInput({ ...input, workdirMode: event.target.value as LocalAgentConfigInput["workdirMode"] })}>
+          <option value="read-only">Read-only workdir</option>
+          <option value="writable">Writable workdir</option>
+        </select>
         <select value={input.runnerKind} onChange={(event) => setInput({ ...input, runnerKind: event.target.value as LocalAgentConfigInput["runnerKind"] })}>
           <option value="fake">Fake</option>
           <option value="codex">Codex</option>
@@ -353,7 +373,7 @@ function AgentConfigPanel({
           <div className="agent-row" key={config.id}>
             <div>
               <strong>{config.name}</strong>
-              <small>{config.runnerKind} · {config.sendingPolicy}</small>
+              <small>{config.runnerKind} · {config.workdirMode} · {config.sendingPolicy}</small>
             </div>
             <button className="icon-button" disabled={disabled || relay.state === "running"} onClick={() => void onStart(config)} title="Start relay">
               <Play size={16} />
@@ -364,14 +384,25 @@ function AgentConfigPanel({
       <button className="stop-button" disabled={relay.state === "stopped"} onClick={onStop} type="button">
         <Square size={14} /> Stop relay
       </button>
+      <div className="status-controls">
+        <input value={statusScope} onChange={(event) => setStatusScope(event.target.value)} placeholder="Working scope, e.g. apps/agentparty-desktop/src" disabled={relay.state === "stopped"} />
+        <div className="status-actions">
+          {(["waiting", "working", "blocked", "done"] as const).map((state) => (
+            <button key={state} type="button" disabled={relay.state === "stopped"} onClick={() => void onPostStatus(state, state === "working" ? statusScope : undefined)}>
+              {state}
+            </button>
+          ))}
+        </div>
+      </div>
       <div className="relay-status">Relay: {relay.state}</div>
+      {error ? <div className="error compact">{error}</div> : null}
       {relay.lastResult ? <div className="relay-log">Last: {relay.lastResult.contextFilePath}</div> : null}
       {relay.error ? <div className="error compact">{relay.error}</div> : null}
     </section>
   );
 }
 
-function ConnectionBadge({ profile, state, presenceCount }: { profile: ServerProfile | null; state: string; presenceCount: number }) {
+function ConnectionBadge({ profile, state, presenceCount, statuses }: { profile: ServerProfile | null; state: string; presenceCount: number; statuses: WorkbenchSnapshot["statuses"] }) {
   const security = profile ? classifySafely(profile.serverUrl) : null;
   return (
     <div className="connection">
@@ -379,6 +410,11 @@ function ConnectionBadge({ profile, state, presenceCount }: { profile: ServerPro
       <span>{profile?.name ?? "No profile"}</span>
       {profile ? <span className="presence-count">{presenceCount} online</span> : null}
       {security ? <SecurityLabel security={security} /> : null}
+      {statuses.map((status) => (
+        <span className="status-chip" key={status.participant.id}>
+          {status.participant.owner_label}: {status.state}{status.scope ? ` · ${status.scope}` : ""}
+        </span>
+      ))}
     </div>
   );
 }

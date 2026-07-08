@@ -48,7 +48,7 @@ class FakeProtocolClient implements ProtocolClient {
   }
 
   async postStatus(): Promise<StatusUpdate> {
-    return { channel_id: "chan-1", sequence: 1, participant: sender, state: "waiting", created_at: 1 };
+    return { channel_id: "chan-1", sequence: 1, participant: sender, state: "waiting", scope: null, created_at: 1 };
   }
 
   watchChannel(): ChannelSubscription {

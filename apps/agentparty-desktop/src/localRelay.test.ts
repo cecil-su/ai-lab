@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { LocalRelay, buildRunnerContext } from "./localRelay";
-import type { ChannelEvent, ChannelMessage, LocalAgentConfig, RunnerContext, ServerProfile, StatusUpdate, TokenMetadata } from "./types";
+import type { ChannelEvent, ChannelMessage, LocalAgentConfig, PostStatusRequest, RunnerContext, ServerProfile, StatusUpdate, TokenMetadata } from "./types";
 import type { ChannelSubscription, ProtocolClient } from "./protocolClient";
 import { MemoryRunnerService, type RunnerService } from "./runnerService";
 import { MemoryPendingQueueStore } from "./pendingQueueStore";
@@ -34,6 +34,7 @@ const config: LocalAgentConfig = {
   channelId: "chan-1",
   runnerKind: "fake",
   workdir: "D:\\Workspace\\agent",
+  workdirMode: "read-only",
   sendingPolicy: "draft",
   createdAt: 1,
   updatedAt: 1,
@@ -53,7 +54,7 @@ function message(sequence: number, body: string, mentions: string[] = ["bot"], s
 }
 
 class FakeProtocolClient implements ProtocolClient {
-  statuses: string[] = [];
+  statuses: { state: string; scope: string | null | undefined }[] = [];
   posts: { body: string; replyTo: string | null }[] = [];
   watcher: ((event: ChannelEvent) => void) | null = null;
 
@@ -66,13 +67,14 @@ class FakeProtocolClient implements ProtocolClient {
     return message(99, request.body, [], agentSender, request.reply_to_message_id);
   }
 
-  async postStatus(_profile: ServerProfile, _token: string, request: { state: string }): Promise<StatusUpdate> {
-    this.statuses.push(request.state);
+  async postStatus(_profile: ServerProfile, _token: string, request: PostStatusRequest): Promise<StatusUpdate> {
+    this.statuses.push({ state: request.state, scope: request.scope });
     return {
       channel_id: "chan-1",
       sequence: this.statuses.length,
       participant: human,
       state: request.state as StatusUpdate["state"],
+      scope: request.scope ?? null,
       created_at: this.statuses.length,
     };
   }
@@ -100,7 +102,20 @@ describe("LocalRelay", () => {
     await relay.start({ profile, token: "token", config, recentMessages: [], lastSequence: 0 });
     await relay.stop();
 
-    expect(protocol.statuses).toEqual(["waiting", "done"]);
+    expect(protocol.statuses).toEqual([
+      { state: "waiting", scope: null },
+      { state: "done", scope: null },
+    ]);
+  });
+
+  it("posts scoped working status from the local relay identity", async () => {
+    await relay.start({ profile, token: "token", config, recentMessages: [], lastSequence: 0 });
+    await relay.postStatus("working", "apps/agentparty-desktop/src");
+
+    expect(protocol.statuses.at(-1)).toEqual({
+      state: "working",
+      scope: "apps/agentparty-desktop/src",
+    });
   });
 
   it("routes fresh mentioned messages to the fake runner", async () => {
@@ -191,6 +206,41 @@ describe("LocalRelay", () => {
         lastSequence: 0,
       }),
     ).rejects.toThrow("bound to a different channel");
+  });
+
+  it("allows read-only agents to share a workdir before relay start", async () => {
+    await expect(
+      relay.start({
+        profile,
+        token: "token",
+        config,
+        knownConfigs: [
+          config,
+          { ...config, id: "agent-2", name: "reader-2", workdir: `${config.workdir}\\` },
+        ],
+        recentMessages: [],
+        lastSequence: 0,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("blocks writable agents sharing a workdir before relay start", async () => {
+    const writable = { ...config, workdirMode: "writable" as const };
+
+    await expect(
+      relay.start({
+        profile,
+        token: "token",
+        config: writable,
+        knownConfigs: [
+          writable,
+          { ...writable, id: "agent-2", name: "writer-2", workdir: `${config.workdir}\\` },
+        ],
+        recentMessages: [],
+        lastSequence: 0,
+      }),
+    ).rejects.toThrow("Writable workdir conflict with writer-2");
+    expect(protocol.statuses).toEqual([]);
   });
 
   it("ignores self messages, replayed messages, and non-mentioned messages", async () => {

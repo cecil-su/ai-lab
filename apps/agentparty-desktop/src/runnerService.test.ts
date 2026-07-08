@@ -8,6 +8,7 @@ const config: LocalAgentConfig = {
   channelId: "chan-1",
   runnerKind: "fake",
   workdir: "D:\\Workspace\\agent",
+  workdirMode: "read-only",
   sendingPolicy: "draft",
   createdAt: 1,
   updatedAt: 1,

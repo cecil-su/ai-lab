@@ -106,6 +106,8 @@ pub struct PostMessageRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 pub struct PostStatusRequest {
     pub state: ParticipantStatusState,
+    #[serde(default)]
+    pub scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
@@ -151,6 +153,7 @@ pub struct StatusUpdate {
     pub sequence: i64,
     pub participant: TokenMetadata,
     pub state: ParticipantStatusState,
+    pub scope: Option<String>,
     #[ts(type = "number")]
     pub created_at: i64,
 }

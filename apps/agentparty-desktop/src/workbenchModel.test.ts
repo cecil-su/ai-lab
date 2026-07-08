@@ -58,6 +58,7 @@ class FakeProtocolClient implements ProtocolClient {
       sequence: 1,
       participant: human,
       state: "waiting",
+      scope: null,
       created_at: 1,
     };
   }
@@ -279,5 +280,29 @@ describe("WorkbenchModel", () => {
     expect(model.getSnapshot().presence).toEqual([]);
     model.switchChannel(profile.id);
     expect(model.getSnapshot().presence.map((item) => item.channel_id)).toEqual(["chan-1"]);
+  });
+
+  it("renders status scope in the active channel snapshot", async () => {
+    const model = new WorkbenchModel(profiles, protocol);
+
+    await model.connect(profile);
+    protocol.watchers.get("chan-1")?.({
+      type: "Status",
+      payload: {
+        channel_id: "chan-1",
+        sequence: 1,
+        participant: human,
+        state: "working",
+        scope: "apps/agentparty-desktop/src",
+        created_at: 1,
+      },
+    });
+
+    expect(model.getSnapshot().statuses).toEqual([
+      expect.objectContaining({
+        state: "working",
+        scope: "apps/agentparty-desktop/src",
+      }),
+    ]);
   });
 });

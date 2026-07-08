@@ -35,6 +35,7 @@ struct LocalAgentConfigInput {
     channel_id: String,
     runner_kind: RunnerKind,
     workdir: String,
+    workdir_mode: WorkdirMode,
     sending_policy: SendingPolicy,
 }
 
@@ -46,6 +47,8 @@ struct LocalAgentConfig {
     channel_id: String,
     runner_kind: RunnerKind,
     workdir: String,
+    #[serde(default = "default_workdir_mode")]
+    workdir_mode: WorkdirMode,
     sending_policy: SendingPolicy,
     created_at: i64,
     updated_at: i64,
@@ -56,6 +59,13 @@ struct LocalAgentConfig {
 enum RunnerKind {
     Fake,
     Codex,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum WorkdirMode {
+    ReadOnly,
+    Writable,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,6 +184,7 @@ fn save_local_agent_config(input: LocalAgentConfigInput) -> Result<LocalAgentCon
         channel_id: input.channel_id.trim().to_string(),
         runner_kind: input.runner_kind,
         workdir: input.workdir.trim().to_string(),
+        workdir_mode: input.workdir_mode,
         sending_policy: input.sending_policy,
         created_at: existing.as_ref().map(|config| config.created_at).unwrap_or(now),
         updated_at: now,
@@ -184,6 +195,10 @@ fn save_local_agent_config(input: LocalAgentConfigInput) -> Result<LocalAgentCon
     configs.sort_by_key(|item| item.created_at);
     write_agent_configs(&configs).map_err(|error| error.to_string())?;
     Ok(config)
+}
+
+fn default_workdir_mode() -> WorkdirMode {
+    WorkdirMode::ReadOnly
 }
 
 #[tauri::command]
@@ -780,6 +795,7 @@ mod tests {
             channel_id: "chan-1".to_string(),
             runner_kind: RunnerKind::Fake,
             workdir: workdir.to_string_lossy().to_string(),
+            workdir_mode: WorkdirMode::ReadOnly,
             sending_policy: SendingPolicy::Draft,
             created_at: 1,
             updated_at: 1,
@@ -822,6 +838,7 @@ mod tests {
             channel_id: "chan-1".to_string(),
             runner_kind: RunnerKind::Codex,
             workdir: workdir.to_string_lossy().to_string(),
+            workdir_mode: WorkdirMode::ReadOnly,
             sending_policy: SendingPolicy::Draft,
             created_at: 1,
             updated_at: 1,
@@ -868,6 +885,7 @@ mod tests {
             channel_id: "chan-1".to_string(),
             runner_kind: RunnerKind::Codex,
             workdir: workdir.to_string_lossy().to_string(),
+            workdir_mode: WorkdirMode::ReadOnly,
             sending_policy: SendingPolicy::Draft,
             created_at: 1,
             updated_at: 1,

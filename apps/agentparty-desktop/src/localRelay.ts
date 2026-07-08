@@ -1,7 +1,8 @@
-import type { ChannelEvent, ChannelMessage, LocalAgentConfig, RunnerContext, RunnerResult, ServerProfile } from "./types";
+import type { ChannelEvent, ChannelMessage, LocalAgentConfig, ParticipantStatusState, RunnerContext, RunnerResult, ServerProfile } from "./types";
 import type { ChannelSubscription, ProtocolClient } from "./protocolClient";
 import type { RunnerService } from "./runnerService";
 import type { PendingQueueStore } from "./pendingQueueStore";
+import { findWritableWorkdirConflict } from "./agentConfigStore";
 
 export type RelayState = "stopped" | "starting" | "running";
 
@@ -48,11 +49,16 @@ export class LocalRelay {
     profile: ServerProfile;
     token: string;
     config: LocalAgentConfig;
+    knownConfigs?: LocalAgentConfig[];
     recentMessages: ChannelMessage[];
     lastSequence: number;
   }): Promise<void> {
     if (input.config.channelId !== input.profile.channelId) {
       throw new Error("Local agent config is bound to a different channel");
+    }
+    const conflict = findWritableWorkdirConflict(input.config, input.knownConfigs ?? [input.config]);
+    if (conflict) {
+      throw new Error(`Writable workdir conflict with ${conflict.name}: ${input.config.workdir}`);
     }
     this.stop(false);
     this.profile = input.profile;
@@ -61,7 +67,7 @@ export class LocalRelay {
     this.recentMessages = input.recentMessages;
     this.startSequence = input.lastSequence;
     this.set({ state: "starting", error: null });
-    await this.protocol.postStatus(input.profile, input.token, { state: "waiting" });
+    await this.protocol.postStatus(input.profile, input.token, { state: "waiting", scope: null });
     this.subscription = this.protocol.watchChannel(
       input.profile,
       input.token,
@@ -81,9 +87,17 @@ export class LocalRelay {
     this.config = null;
     this.startSequence = 0;
     if (advertise && profile && token) {
-      await this.protocol.postStatus(profile, token, { state: "done" });
+      await this.protocol.postStatus(profile, token, { state: "done", scope: null });
     }
     this.set({ state: "stopped" });
+  }
+
+  async postStatus(state: ParticipantStatusState, scope?: string): Promise<void> {
+    if (!this.profile || !this.token) return;
+    await this.protocol.postStatus(this.profile, this.token, {
+      state,
+      scope: scope?.trim() || null,
+    });
   }
 
   async handleEvent(event: ChannelEvent): Promise<void> {

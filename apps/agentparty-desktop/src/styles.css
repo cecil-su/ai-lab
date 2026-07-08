@@ -179,6 +179,7 @@ button:disabled {
 .connection,
 .security,
 .presence-count,
+.status-chip,
 .message-meta,
 .reply-context,
 .send-row {
@@ -189,6 +190,30 @@ button:disabled {
 
 .presence-count {
   color: #667085;
+  font-size: 12px;
+}
+
+.status-chip {
+  border-radius: 999px;
+  background: #eef2f7;
+  color: #344054;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.status-controls {
+  display: grid;
+  gap: 8px;
+}
+
+.status-actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.status-actions button {
+  padding: 8px 6px;
   font-size: 12px;
 }
 

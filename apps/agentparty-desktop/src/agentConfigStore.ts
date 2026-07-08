@@ -14,10 +14,28 @@ export function toPersistedAgentConfig(input: LocalAgentConfigInput, now = Date.
     channelId: input.channelId.trim(),
     runnerKind: input.runnerKind,
     workdir: input.workdir.trim(),
+    workdirMode: input.workdirMode,
     sendingPolicy: input.sendingPolicy,
     createdAt: now,
     updatedAt: now,
   };
+}
+
+export function findWritableWorkdirConflict(
+  config: LocalAgentConfig,
+  configs: LocalAgentConfig[],
+): LocalAgentConfig | null {
+  if (config.workdirMode !== "writable") return null;
+  const normalized = normalizeWorkdir(config.workdir);
+  return configs.find((item) =>
+    item.id !== config.id &&
+    item.workdirMode === "writable" &&
+    normalizeWorkdir(item.workdir) === normalized
+  ) ?? null;
+}
+
+function normalizeWorkdir(workdir: string): string {
+  return workdir.trim().replace(/[\\/]+$/, "").toLowerCase();
 }
 
 export class TauriAgentConfigStore implements AgentConfigStore {
