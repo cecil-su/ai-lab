@@ -1,15 +1,19 @@
 use crate::db::{
-    authenticate_token, create_channel as db_create_channel, list_channels as db_list_channels,
-    list_tokens as db_list_tokens, mint_token as db_mint_token, open_database,
-    revoke_token as db_revoke_token, ChannelRecord, TokenRecord,
+    append_message_event, append_status_event, authenticate_token, channel_by_id,
+    create_channel as db_create_channel, last_channel_sequence, list_channel_events,
+    list_channels as db_list_channels, list_tokens as db_list_tokens, mint_token as db_mint_token,
+    open_database, revoke_token as db_revoke_token, ChannelRecord, TokenRecord,
 };
 use crate::protocol::{
     health_response, AdminLoginRequest, AdminLoginResponse, AuthenticatedTokenResponse,
-    ChannelMode, ChannelResponse, CreateChannelRequest, ErrorResponse, HealthResponse,
-    MintTokenRequest, MintTokenResponse, ProtocolError, TokenKind, TokenMetadata,
+    ChannelEvent, ChannelHistoryResponse, ChannelMode, ChannelResponse, CreateChannelRequest,
+    ErrorResponse, HealthResponse, MintTokenRequest, MintTokenResponse, PostMessageRequest,
+    PostStatusRequest, PresenceState, PresenceUpdate, ProtocolError, SentAckFrame, TokenKind,
+    TokenMetadata, WebSocketClientFrame, WebSocketFrame, WebSocketWelcomeFrame,
 };
 use crate::ServiceConfig;
-use axum::extract::{Path as AxumPath, State};
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
@@ -18,6 +22,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::net::TcpListener;
+use tokio::sync::broadcast;
 
 const ADMIN_SESSION_COOKIE: &str = "ap_admin_session";
 const ADMIN_SESSION_SECONDS: u64 = 60 * 60;
@@ -27,6 +32,7 @@ pub struct AppState {
     database_path: Arc<std::path::PathBuf>,
     admin_secret: Arc<String>,
     admin_sessions: Arc<std::sync::Mutex<HashMap<String, SystemTime>>>,
+    events: broadcast::Sender<WebSocketFrame>,
 }
 
 pub fn build_router(config: ServiceConfig) -> anyhow::Result<Router> {
@@ -37,6 +43,7 @@ pub fn build_router(config: ServiceConfig) -> anyhow::Result<Router> {
         database_path: Arc::new(config.database_path),
         admin_secret: Arc::new(config.admin_secret),
         admin_sessions: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        events: broadcast::channel(256).0,
     };
 
     Ok(Router::new()
@@ -50,6 +57,16 @@ pub fn build_router(config: ServiceConfig) -> anyhow::Result<Router> {
         .route("/admin/api/tokens", get(list_tokens).post(mint_token))
         .route("/admin/api/tokens/{token_id}/revoke", post(revoke_token))
         .route("/api/auth/me", get(authenticated_token))
+        .route(
+            "/api/channels/{channel_id}/messages",
+            post(post_channel_message),
+        )
+        .route(
+            "/api/channels/{channel_id}/status",
+            post(post_channel_status),
+        )
+        .route("/api/channels/{channel_id}/events", get(channel_history))
+        .route("/api/channels/{channel_id}/ws", get(channel_websocket))
         .with_state(state))
 }
 
@@ -256,6 +273,123 @@ async fn authenticated_token(State(state): State<AppState>, headers: HeaderMap) 
     }
 }
 
+async fn post_channel_message(
+    State(state): State<AppState>,
+    AxumPath(channel_id): AxumPath<String>,
+    headers: HeaderMap,
+    Json(payload): Json<PostMessageRequest>,
+) -> Response {
+    let Some(token) = authenticated_bearer(&state, &headers) else {
+        return json_error(StatusCode::UNAUTHORIZED, "unauthorized", "Unauthorized");
+    };
+
+    match append_message_event(
+        &state.database_path,
+        &channel_id,
+        token_metadata(token),
+        &payload.body,
+        payload.mentions,
+        payload.reply_to_message_id,
+    ) {
+        Ok(ChannelEvent::Message(message)) => {
+            let _ = state.events.send(WebSocketFrame::Message(message.clone()));
+            (StatusCode::CREATED, Json(message)).into_response()
+        }
+        Ok(_) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "Internal error",
+        ),
+        Err(_) => json_error(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "Invalid message request",
+        ),
+    }
+}
+
+async fn post_channel_status(
+    State(state): State<AppState>,
+    AxumPath(channel_id): AxumPath<String>,
+    headers: HeaderMap,
+    Json(payload): Json<PostStatusRequest>,
+) -> Response {
+    let Some(token) = authenticated_bearer(&state, &headers) else {
+        return json_error(StatusCode::UNAUTHORIZED, "unauthorized", "Unauthorized");
+    };
+
+    match append_status_event(
+        &state.database_path,
+        &channel_id,
+        token_metadata(token),
+        payload.state,
+    ) {
+        Ok(ChannelEvent::Status(status)) => {
+            let _ = state.events.send(WebSocketFrame::Status(status.clone()));
+            (StatusCode::CREATED, Json(status)).into_response()
+        }
+        Ok(_) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "Internal error",
+        ),
+        Err(_) => json_error(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "Invalid status request",
+        ),
+    }
+}
+
+async fn channel_history(
+    State(state): State<AppState>,
+    AxumPath(channel_id): AxumPath<String>,
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    if authenticated_bearer(&state, &headers).is_none() {
+        return json_error(StatusCode::UNAUTHORIZED, "unauthorized", "Unauthorized");
+    }
+
+    let after_sequence = query
+        .get("after_sequence")
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(0);
+    match (
+        list_channel_events(&state.database_path, &channel_id, after_sequence),
+        last_channel_sequence(&state.database_path, &channel_id),
+    ) {
+        (Ok(events), Ok(last_sequence)) => Json(ChannelHistoryResponse {
+            events,
+            last_sequence,
+        })
+        .into_response(),
+        _ => json_error(StatusCode::NOT_FOUND, "not_found", "Channel not found"),
+    }
+}
+
+async fn channel_websocket(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+    AxumPath(channel_id): AxumPath<String>,
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    let Some(token) = websocket_token(&state, &headers, &query) else {
+        return json_error(StatusCode::UNAUTHORIZED, "unauthorized", "Unauthorized");
+    };
+    let Ok(Some(channel)) = channel_by_id(&state.database_path, &channel_id) else {
+        return json_error(StatusCode::NOT_FOUND, "not_found", "Channel not found");
+    };
+
+    let after_sequence = query
+        .get("after_sequence")
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(0);
+
+    ws.on_upgrade(move |socket| websocket_session(socket, state, channel, token, after_sequence))
+}
+
 fn require_admin_session(state: &AppState, headers: &HeaderMap) -> Result<(), Response> {
     let Some(session_id) = cookie_value(headers, ADMIN_SESSION_COOKIE) else {
         return Err(json_error(
@@ -296,6 +430,27 @@ fn bearer_token(headers: &HeaderMap) -> Option<&str> {
     value.strip_prefix("Bearer ")
 }
 
+fn authenticated_bearer(state: &AppState, headers: &HeaderMap) -> Option<TokenRecord> {
+    let secret = bearer_token(headers)?;
+    authenticate_token(&state.database_path, secret)
+        .ok()
+        .flatten()
+}
+
+fn websocket_token(
+    state: &AppState,
+    headers: &HeaderMap,
+    query: &HashMap<String, String>,
+) -> Option<TokenRecord> {
+    if let Some(token) = authenticated_bearer(state, headers) {
+        return Some(token);
+    }
+    let secret = query.get("token")?;
+    authenticate_token(&state.database_path, secret)
+        .ok()
+        .flatten()
+}
+
 fn json_error(status: StatusCode, code: &str, message: &str) -> Response {
     (
         status,
@@ -334,6 +489,21 @@ fn token_metadata(record: TokenRecord) -> TokenMetadata {
     }
 }
 
+fn channel_from_record(record: ChannelRecord) -> ChannelResponse {
+    channel_response(record)
+}
+
+fn frame_channel_id(frame: &WebSocketFrame) -> Option<&str> {
+    match frame {
+        WebSocketFrame::Welcome(frame) => Some(&frame.channel.id),
+        WebSocketFrame::Message(message) => Some(&message.channel_id),
+        WebSocketFrame::Status(status) => Some(&status.channel_id),
+        WebSocketFrame::Presence(presence) => Some(&presence.channel_id),
+        WebSocketFrame::Sent(sent) => Some(&sent.channel_id),
+        WebSocketFrame::Error(_) => None,
+    }
+}
+
 fn channel_mode_str(mode: &ChannelMode) -> &'static str {
     match mode {
         ChannelMode::Normal => "normal",
@@ -362,6 +532,154 @@ fn hex(bytes: &[u8]) -> String {
         out.push(TABLE[(byte & 0x0f) as usize] as char);
     }
     out
+}
+
+async fn websocket_session(
+    mut socket: WebSocket,
+    state: AppState,
+    channel: ChannelRecord,
+    token: TokenRecord,
+    after_sequence: i64,
+) {
+    let channel = channel_from_record(channel);
+    let self_token = token_metadata(token);
+    let mut receiver = state.events.subscribe();
+
+    let last_sequence = last_channel_sequence(&state.database_path, &channel.id).unwrap_or(0);
+    let welcome = WebSocketFrame::Welcome(WebSocketWelcomeFrame {
+        channel: channel.clone(),
+        self_token: self_token.clone(),
+        participants: Vec::new(),
+        last_sequence,
+        protocol_version: 1,
+    });
+    if send_ws_frame(&mut socket, &welcome).await.is_err() {
+        return;
+    }
+
+    if let Ok(events) = list_channel_events(&state.database_path, &channel.id, after_sequence) {
+        for event in events {
+            let frame = frame_from_event(event);
+            if send_ws_frame(&mut socket, &frame).await.is_err() {
+                return;
+            }
+        }
+    }
+
+    let online = WebSocketFrame::Presence(PresenceUpdate {
+        channel_id: channel.id.clone(),
+        participant: self_token.clone(),
+        state: PresenceState::Online,
+    });
+    let _ = state.events.send(online);
+
+    loop {
+        tokio::select! {
+            incoming = socket.recv() => {
+                match incoming {
+                    Some(Ok(Message::Text(text))) => {
+                        if handle_client_ws_frame(&mut socket, &state, &channel.id, &self_token, &text).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Ok(_)) => {}
+                    Some(Err(_)) => break,
+                }
+            }
+            broadcast = receiver.recv() => {
+                match broadcast {
+                    Ok(frame) => {
+                        if frame_channel_id(&frame) == Some(channel.id.as_str())
+                            && send_ws_frame(&mut socket, &frame).await.is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        let _ = send_ws_frame(
+                            &mut socket,
+                            &WebSocketFrame::Error(ProtocolError {
+                                code: "history_required".to_string(),
+                                message: "Reconnect with after_sequence to catch up".to_string(),
+                            }),
+                        )
+                        .await;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        }
+    }
+
+    let offline = WebSocketFrame::Presence(PresenceUpdate {
+        channel_id: channel.id,
+        participant: self_token,
+        state: PresenceState::Offline,
+    });
+    let _ = state.events.send(offline);
+}
+
+async fn handle_client_ws_frame(
+    socket: &mut WebSocket,
+    state: &AppState,
+    channel_id: &str,
+    self_token: &TokenMetadata,
+    text: &str,
+) -> anyhow::Result<()> {
+    let frame: WebSocketClientFrame = serde_json::from_str(text)?;
+    let event = match frame {
+        WebSocketClientFrame::Message(payload) => append_message_event(
+            &state.database_path,
+            channel_id,
+            self_token.clone(),
+            &payload.body,
+            payload.mentions,
+            payload.reply_to_message_id,
+        )?,
+        WebSocketClientFrame::Status(payload) => append_status_event(
+            &state.database_path,
+            channel_id,
+            self_token.clone(),
+            payload.state,
+        )?,
+    };
+    let frame = frame_from_event(event);
+    let sequence = frame_sequence(&frame).unwrap_or(0);
+    let _ = state.events.send(frame);
+    send_ws_frame(
+        socket,
+        &WebSocketFrame::Sent(SentAckFrame {
+            channel_id: channel_id.to_string(),
+            sequence,
+        }),
+    )
+    .await?;
+    Ok(())
+}
+
+fn frame_from_event(event: ChannelEvent) -> WebSocketFrame {
+    match event {
+        ChannelEvent::Message(message) => WebSocketFrame::Message(message),
+        ChannelEvent::Status(status) => WebSocketFrame::Status(status),
+        ChannelEvent::Presence(presence) => WebSocketFrame::Presence(presence),
+    }
+}
+
+fn frame_sequence(frame: &WebSocketFrame) -> Option<i64> {
+    match frame {
+        WebSocketFrame::Message(message) => Some(message.sequence),
+        WebSocketFrame::Status(status) => Some(status.sequence),
+        WebSocketFrame::Sent(sent) => Some(sent.sequence),
+        _ => None,
+    }
+}
+
+async fn send_ws_frame(socket: &mut WebSocket, frame: &WebSocketFrame) -> anyhow::Result<()> {
+    socket
+        .send(Message::Text(serde_json::to_string(frame)?.into()))
+        .await?;
+    Ok(())
 }
 
 async fn shutdown_signal() {

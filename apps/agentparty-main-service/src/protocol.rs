@@ -97,16 +97,113 @@ pub struct AuthenticatedTokenResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct PostMessageRequest {
+    pub body: String,
+    pub mentions: Vec<String>,
+    pub reply_to_message_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct PostStatusRequest {
+    pub state: ParticipantStatusState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct ChannelHistoryResponse {
+    pub events: Vec<ChannelEvent>,
+    #[ts(type = "number")]
+    pub last_sequence: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[serde(tag = "type", content = "payload")]
+pub enum WebSocketClientFrame {
+    Message(PostMessageRequest),
+    Status(PostStatusRequest),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[serde(tag = "type", content = "payload")]
+pub enum ChannelEvent {
+    Message(ChannelMessage),
+    Status(StatusUpdate),
+    Presence(PresenceUpdate),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct ChannelMessage {
+    pub id: String,
+    pub channel_id: String,
+    #[ts(type = "number")]
+    pub sequence: i64,
+    pub sender: TokenMetadata,
+    pub body: String,
+    pub mentions: Vec<String>,
+    pub reply_to_message_id: Option<String>,
+    #[ts(type = "number")]
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct StatusUpdate {
+    pub channel_id: String,
+    #[ts(type = "number")]
+    pub sequence: i64,
+    pub participant: TokenMetadata,
+    pub state: ParticipantStatusState,
+    #[ts(type = "number")]
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct PresenceUpdate {
+    pub channel_id: String,
+    pub participant: TokenMetadata,
+    pub state: PresenceState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ParticipantStatusState {
+    Waiting,
+    Working,
+    Blocked,
+    Done,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum PresenceState {
+    Online,
+    Offline,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(tag = "type", content = "payload")]
 pub enum WebSocketFrame {
-    Welcome(WelcomeFrame),
+    Welcome(WebSocketWelcomeFrame),
+    Message(ChannelMessage),
+    Status(StatusUpdate),
+    Presence(PresenceUpdate),
+    Sent(SentAckFrame),
     Error(ProtocolError),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
-pub struct WelcomeFrame {
-    pub connection_id: String,
+pub struct WebSocketWelcomeFrame {
+    pub channel: ChannelResponse,
+    pub self_token: TokenMetadata,
+    pub participants: Vec<PresenceUpdate>,
+    #[ts(type = "number")]
+    pub last_sequence: i64,
     pub protocol_version: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct SentAckFrame {
+    pub channel_id: String,
+    #[ts(type = "number")]
+    pub sequence: i64,
 }
 
 pub fn health_response() -> HealthResponse {
@@ -155,9 +252,31 @@ pub fn generated_typescript_contract() -> String {
         "",
         &format!("export {}", AuthenticatedTokenResponse::decl()),
         "",
+        &format!("export {}", PostMessageRequest::decl()),
+        "",
+        &format!("export {}", PostStatusRequest::decl()),
+        "",
+        &format!("export {}", ChannelHistoryResponse::decl()),
+        "",
+        &format!("export {}", WebSocketClientFrame::decl()),
+        "",
+        &format!("export {}", ChannelEvent::decl()),
+        "",
+        &format!("export {}", ChannelMessage::decl()),
+        "",
+        &format!("export {}", StatusUpdate::decl()),
+        "",
+        &format!("export {}", PresenceUpdate::decl()),
+        "",
+        &format!("export {}", ParticipantStatusState::decl()),
+        "",
+        &format!("export {}", PresenceState::decl()),
+        "",
         &format!("export {}", WebSocketFrame::decl()),
         "",
-        &format!("export {}", WelcomeFrame::decl()),
+        &format!("export {}", WebSocketWelcomeFrame::decl()),
+        "",
+        &format!("export {}", SentAckFrame::decl()),
         "",
     ]
     .join("\n")

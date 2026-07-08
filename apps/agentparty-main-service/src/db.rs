@@ -1,3 +1,6 @@
+use crate::protocol::{
+    ChannelEvent, ChannelMessage, ParticipantStatusState, StatusUpdate, TokenMetadata,
+};
 use rusqlite::Connection;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -60,6 +63,17 @@ fn migrate(connection: &Connection) -> anyhow::Result<()> {
             revoked_at INTEGER
         );
 
+        CREATE TABLE IF NOT EXISTS channel_events (
+            id TEXT PRIMARY KEY NOT NULL,
+            channel_id TEXT NOT NULL,
+            sequence INTEGER NOT NULL,
+            kind TEXT NOT NULL CHECK (kind IN ('message', 'status', 'presence')),
+            payload_json TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY (channel_id) REFERENCES channels(id),
+            UNIQUE(channel_id, sequence)
+        );
+
         INSERT OR IGNORE INTO service_metadata (key, value)
         VALUES ('schema_version', '1');
         "#,
@@ -105,6 +119,23 @@ pub fn list_channels(path: &Path) -> anyhow::Result<Vec<ChannelRecord>> {
     })?;
 
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+pub fn channel_by_id(path: &Path, channel_id: &str) -> anyhow::Result<Option<ChannelRecord>> {
+    let connection = open_database(path)?;
+    let mut statement =
+        connection.prepare("SELECT id, name, mode, created_at FROM channels WHERE id = ?1")?;
+    let mut rows = statement.query([channel_id])?;
+    let Some(row) = rows.next()? else {
+        return Ok(None);
+    };
+
+    Ok(Some(ChannelRecord {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        mode: row.get(2)?,
+        created_at: row.get(3)?,
+    }))
 }
 
 pub fn mint_token(
@@ -198,6 +229,108 @@ pub fn authenticate_token(path: &Path, secret: &str) -> anyhow::Result<Option<To
     }))
 }
 
+pub fn append_message_event(
+    path: &Path,
+    channel_id: &str,
+    sender: TokenMetadata,
+    body: &str,
+    mentions: Vec<String>,
+    reply_to_message_id: Option<String>,
+) -> anyhow::Result<ChannelEvent> {
+    let body = body.trim();
+    if body.is_empty() {
+        anyhow::bail!("message body is required");
+    }
+    let connection = open_database(path)?;
+    ensure_channel_exists(&connection, channel_id)?;
+    connection.execute("BEGIN IMMEDIATE", [])?;
+    let inserted = (|| -> anyhow::Result<ChannelEvent> {
+        let sequence = next_sequence(&connection, channel_id)?;
+        let created_at = unix_now();
+        let event = ChannelEvent::Message(ChannelMessage {
+            id: make_id("msg"),
+            channel_id: channel_id.to_string(),
+            sequence,
+            sender,
+            body: body.to_string(),
+            mentions,
+            reply_to_message_id,
+            created_at,
+        });
+        insert_event(
+            &connection,
+            channel_id,
+            sequence,
+            "message",
+            &event,
+            created_at,
+        )?;
+        Ok(event)
+    })();
+    finish_transaction(&connection, inserted)
+}
+
+pub fn append_status_event(
+    path: &Path,
+    channel_id: &str,
+    participant: TokenMetadata,
+    state: ParticipantStatusState,
+) -> anyhow::Result<ChannelEvent> {
+    let connection = open_database(path)?;
+    ensure_channel_exists(&connection, channel_id)?;
+    connection.execute("BEGIN IMMEDIATE", [])?;
+    let inserted = (|| -> anyhow::Result<ChannelEvent> {
+        let sequence = next_sequence(&connection, channel_id)?;
+        let created_at = unix_now();
+        let event = ChannelEvent::Status(StatusUpdate {
+            channel_id: channel_id.to_string(),
+            sequence,
+            participant,
+            state,
+            created_at,
+        });
+        insert_event(
+            &connection,
+            channel_id,
+            sequence,
+            "status",
+            &event,
+            created_at,
+        )?;
+        Ok(event)
+    })();
+    finish_transaction(&connection, inserted)
+}
+
+pub fn list_channel_events(
+    path: &Path,
+    channel_id: &str,
+    after_sequence: i64,
+) -> anyhow::Result<Vec<ChannelEvent>> {
+    let connection = open_database(path)?;
+    ensure_channel_exists(&connection, channel_id)?;
+    let mut statement = connection.prepare(
+        "SELECT payload_json FROM channel_events
+         WHERE channel_id = ?1 AND sequence > ?2
+         ORDER BY sequence ASC",
+    )?;
+    let rows = statement.query_map((channel_id, after_sequence), |row| {
+        let payload: String = row.get(0)?;
+        let event: ChannelEvent = serde_json::from_str(&payload).map_err(|err| {
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(err))
+        })?;
+        Ok(event)
+    })?;
+
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+pub fn last_channel_sequence(path: &Path, channel_id: &str) -> anyhow::Result<i64> {
+    let connection = open_database(path)?;
+    ensure_channel_exists(&connection, channel_id)?;
+    last_sequence(&connection, channel_id)
+}
+
 fn get_token_by_id(connection: &Connection, token_id: &str) -> anyhow::Result<TokenRecord> {
     Ok(connection.query_row(
         "SELECT id, kind, owner_label, created_at, revoked_at FROM tokens WHERE id = ?1",
@@ -212,6 +345,66 @@ fn get_token_by_id(connection: &Connection, token_id: &str) -> anyhow::Result<To
             })
         },
     )?)
+}
+
+fn ensure_channel_exists(connection: &Connection, channel_id: &str) -> anyhow::Result<()> {
+    let exists: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM channels WHERE id = ?1",
+        [channel_id],
+        |row| row.get(0),
+    )?;
+    if exists == 0 {
+        anyhow::bail!("channel not found");
+    }
+    Ok(())
+}
+
+fn next_sequence(connection: &Connection, channel_id: &str) -> anyhow::Result<i64> {
+    Ok(last_sequence(connection, channel_id)? + 1)
+}
+
+fn last_sequence(connection: &Connection, channel_id: &str) -> anyhow::Result<i64> {
+    Ok(connection.query_row(
+        "SELECT COALESCE(MAX(sequence), 0) FROM channel_events WHERE channel_id = ?1",
+        [channel_id],
+        |row| row.get(0),
+    )?)
+}
+
+fn insert_event(
+    connection: &Connection,
+    channel_id: &str,
+    sequence: i64,
+    kind: &str,
+    event: &ChannelEvent,
+    created_at: i64,
+) -> anyhow::Result<()> {
+    connection.execute(
+        "INSERT INTO channel_events (id, channel_id, sequence, kind, payload_json, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        (
+            make_id("evt"),
+            channel_id,
+            sequence,
+            kind,
+            serde_json::to_string(event)?,
+            created_at,
+        ),
+    )?;
+    Ok(())
+}
+
+fn finish_transaction<T>(connection: &Connection, result: anyhow::Result<T>) -> anyhow::Result<T> {
+    match result {
+        Ok(value) => {
+            connection.execute("COMMIT", [])?;
+            Ok(value)
+        }
+        Err(err) => {
+            let _ = connection.execute("ROLLBACK", []);
+            Err(err)
+        }
+    }
 }
 
 fn make_id(prefix: &str) -> String {

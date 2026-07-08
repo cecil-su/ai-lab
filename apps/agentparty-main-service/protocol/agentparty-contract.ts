@@ -29,6 +29,28 @@ export type TokenKind = "human" | "agent";
 
 export type AuthenticatedTokenResponse = { token: TokenMetadata, };
 
-export type WebSocketFrame = { "type": "Welcome", "payload": WelcomeFrame } | { "type": "Error", "payload": ProtocolError };
+export type PostMessageRequest = { body: string, mentions: Array<string>, reply_to_message_id: string | null, };
 
-export type WelcomeFrame = { connection_id: string, protocol_version: number, };
+export type PostStatusRequest = { state: ParticipantStatusState, };
+
+export type ChannelHistoryResponse = { events: Array<ChannelEvent>, last_sequence: number, };
+
+export type WebSocketClientFrame = { "type": "Message", "payload": PostMessageRequest } | { "type": "Status", "payload": PostStatusRequest };
+
+export type ChannelEvent = { "type": "Message", "payload": ChannelMessage } | { "type": "Status", "payload": StatusUpdate } | { "type": "Presence", "payload": PresenceUpdate };
+
+export type ChannelMessage = { id: string, channel_id: string, sequence: number, sender: TokenMetadata, body: string, mentions: Array<string>, reply_to_message_id: string | null, created_at: number, };
+
+export type StatusUpdate = { channel_id: string, sequence: number, participant: TokenMetadata, state: ParticipantStatusState, created_at: number, };
+
+export type PresenceUpdate = { channel_id: string, participant: TokenMetadata, state: PresenceState, };
+
+export type ParticipantStatusState = "waiting" | "working" | "blocked" | "done";
+
+export type PresenceState = "online" | "offline";
+
+export type WebSocketFrame = { "type": "Welcome", "payload": WebSocketWelcomeFrame } | { "type": "Message", "payload": ChannelMessage } | { "type": "Status", "payload": StatusUpdate } | { "type": "Presence", "payload": PresenceUpdate } | { "type": "Sent", "payload": SentAckFrame } | { "type": "Error", "payload": ProtocolError };
+
+export type WebSocketWelcomeFrame = { channel: ChannelResponse, self_token: TokenMetadata, participants: Array<PresenceUpdate>, last_sequence: number, protocol_version: number, };
+
+export type SentAckFrame = { channel_id: string, sequence: number, };
