@@ -1,7 +1,7 @@
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{fs, path::PathBuf};
+use std::{fs, path::{Path, PathBuf}, process::Command};
 
 const APP_DIR: &str = "agentparty-desktop";
 const CREDENTIAL_PREFIX: &str = "AgentParty Desktop Token";
@@ -55,6 +55,7 @@ struct LocalAgentConfig {
 #[serde(rename_all = "kebab-case")]
 enum RunnerKind {
     Fake,
+    Codex,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -187,31 +188,210 @@ fn save_local_agent_config(input: LocalAgentConfigInput) -> Result<LocalAgentCon
 
 #[tauri::command]
 fn run_fake_runner(agent_config: LocalAgentConfig, context: Value) -> Result<RunnerResult, String> {
+    let runner_context = write_runner_context(&agent_config, &context)?;
+
+    let result = RunnerResult {
+        status: "done".to_string(),
+        draft_reply: format!(
+            "Fake runner {} saw: {}",
+            agent_config.name, runner_context.body
+        ),
+        stdout: format!(
+            "fake runner handled {}",
+            runner_context.triggering_message_id
+        ),
+        stderr: String::new(),
+        exit_code: 0,
+        context_file_path: runner_context
+            .context_file_path
+            .to_string_lossy()
+            .to_string(),
+    };
+    append_runner_result_log(
+        &agent_config,
+        &runner_context.triggering_message_id,
+        &result,
+    )?;
+    Ok(result)
+}
+
+#[tauri::command]
+fn run_codex_runner(
+    agent_config: LocalAgentConfig,
+    context: Value,
+) -> Result<RunnerResult, String> {
+    run_codex_runner_with_executor(agent_config, context, run_codex_process)
+}
+
+struct RunnerContextFile {
+    triggering_message_id: String,
+    body: String,
+    context_file_path: PathBuf,
+}
+
+struct CodexProcessOutput {
+    stdout: String,
+    stderr: String,
+    exit_code: i32,
+}
+
+fn run_codex_runner_with_executor(
+    agent_config: LocalAgentConfig,
+    context: Value,
+    execute: impl FnOnce(&Path, &Path) -> Result<CodexProcessOutput, String>,
+) -> Result<RunnerResult, String> {
+    let runner_context = write_runner_context(&agent_config, &context)?;
+    let final_message_path = runner_context
+        .context_file_path
+        .with_extension("codex-final.txt");
+    let process_output = execute(&runner_context.context_file_path, &final_message_path);
+    let result = match process_output {
+        Ok(output) => normalize_codex_output(&runner_context, &final_message_path, output),
+        Err(error) => RunnerResult {
+            status: "blocked".to_string(),
+            draft_reply: String::new(),
+            stdout: String::new(),
+            stderr: error,
+            exit_code: 1,
+            context_file_path: runner_context
+                .context_file_path
+                .to_string_lossy()
+                .to_string(),
+        },
+    };
+    append_runner_result_log(
+        &agent_config,
+        &runner_context.triggering_message_id,
+        &result,
+    )?;
+    Ok(result)
+}
+
+fn run_codex_process(
+    context_file_path: &Path,
+    final_message_path: &Path,
+) -> Result<CodexProcessOutput, String> {
+    let codex_bin = std::env::var("AGENTPARTY_CODEX_BIN").unwrap_or_else(|_| "codex".to_string());
+    let workdir = context_file_path
+        .parent()
+        .ok_or_else(|| "runner context file has no parent directory".to_string())?;
+    let prompt = format!(
+        "You are replying as a local AgentParty agent. Read the runner context JSON from this file: {}. Return only the draft reply body for the triggering message. Do not post to the channel.",
+        context_file_path.display()
+    );
+    let output = Command::new(codex_bin)
+        .arg("exec")
+        .arg("--json")
+        .arg("--sandbox")
+        .arg("read-only")
+        .arg("--cd")
+        .arg(workdir)
+        .arg("--output-last-message")
+        .arg(final_message_path)
+        .arg(prompt)
+        .output()
+        .map_err(|error| format!("failed to start Codex runner: {error}"))?;
+
+    Ok(CodexProcessOutput {
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        exit_code: output.status.code().unwrap_or(1),
+    })
+}
+
+fn normalize_codex_output(
+    runner_context: &RunnerContextFile,
+    final_message_path: &Path,
+    output: CodexProcessOutput,
+) -> RunnerResult {
+    let final_message = fs::read_to_string(final_message_path)
+        .ok()
+        .map(|message| message.trim().to_string())
+        .filter(|message| !message.is_empty());
+    let status = if output.exit_code == 0 && final_message.is_some() {
+        "done"
+    } else {
+        "blocked"
+    };
+    let stderr = if output.exit_code == 0 && final_message.is_none() {
+        "Codex did not produce a draft reply".to_string()
+    } else if output.exit_code == 0 {
+        output.stderr
+    } else if output.stderr.trim().is_empty() {
+        format!("Codex exited with code {}", output.exit_code)
+    } else {
+        output.stderr
+    };
+
+    RunnerResult {
+        status: status.to_string(),
+        draft_reply: final_message.unwrap_or_default(),
+        stdout: append_codex_session_metadata(output.stdout),
+        stderr,
+        exit_code: output.exit_code,
+        context_file_path: runner_context
+            .context_file_path
+            .to_string_lossy()
+            .to_string(),
+    }
+}
+
+fn append_codex_session_metadata(stdout: String) -> String {
+    let session_ids = stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|event| {
+            event
+                .get("session_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect::<Vec<_>>();
+    if session_ids.is_empty() {
+        stdout
+    } else {
+        format!("{stdout}\n[codex session_ids: {}]", session_ids.join(", "))
+    }
+}
+
+fn write_runner_context(
+    agent_config: &LocalAgentConfig,
+    context: &Value,
+) -> Result<RunnerContextFile, String> {
     let message = context
         .get("triggeringMessage")
         .ok_or_else(|| "runner context missing triggeringMessage".to_string())?;
     let triggering_message_id = message
         .get("id")
         .and_then(Value::as_str)
-        .ok_or_else(|| "runner context missing triggeringMessage.id".to_string())?;
-    let body = message.get("body").and_then(Value::as_str).unwrap_or("");
+        .ok_or_else(|| "runner context missing triggeringMessage.id".to_string())?
+        .to_string();
+    let body = message
+        .get("body")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
     let workdir = PathBuf::from(&agent_config.workdir);
     fs::create_dir_all(&workdir).map_err(|error| error.to_string())?;
     let context_file_path = workdir.join(format!("runner-context-{triggering_message_id}.json"));
-    let context_json = serde_json::to_string_pretty(&context).map_err(|error| error.to_string())?;
+    let context_json = serde_json::to_string_pretty(context).map_err(|error| error.to_string())?;
     fs::write(&context_file_path, context_json).map_err(|error| error.to_string())?;
 
-    let result = RunnerResult {
-        status: "done".to_string(),
-        draft_reply: format!("Fake runner {} saw: {}", agent_config.name, body),
-        stdout: format!("fake runner handled {triggering_message_id}"),
-        stderr: String::new(),
-        exit_code: 0,
-        context_file_path: context_file_path.to_string_lossy().to_string(),
-    };
+    Ok(RunnerContextFile {
+        triggering_message_id,
+        body,
+        context_file_path,
+    })
+}
+
+fn append_runner_result_log(
+    agent_config: &LocalAgentConfig,
+    triggering_message_id: &str,
+    result: &RunnerResult,
+) -> Result<(), String> {
     append_runner_log(RunnerLogEntry {
         id: format!("log-{}", unix_now_millis()),
-        agent_config_id: agent_config.id,
+        agent_config_id: agent_config.id.clone(),
         triggering_message_id: triggering_message_id.to_string(),
         created_at: unix_now(),
         status: result.status.clone(),
@@ -221,8 +401,7 @@ fn run_fake_runner(agent_config: LocalAgentConfig, context: Value) -> Result<Run
         exit_code: result.exit_code,
         context_file_path: result.context_file_path.clone(),
     })
-    .map_err(|error| error.to_string())?;
-    Ok(result)
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -259,6 +438,7 @@ fn main() {
             list_local_agent_configs,
             save_local_agent_config,
             run_fake_runner,
+            run_codex_runner,
             list_runner_logs,
             list_pending_drafts,
             create_pending_draft,
@@ -626,6 +806,97 @@ mod tests {
         let logs = read_runner_logs().expect("runner logs should be readable");
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].triggering_message_id, "msg-1");
+        std::env::remove_var("AGENTPARTY_DESKTOP_DATA_DIR");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn codex_runner_normalizes_fake_process_success() {
+        let _guard = TEST_MUTEX.lock().expect("test lock poisoned");
+        let root = std::env::temp_dir().join(format!("agentparty-desktop-test-{}", unix_now_millis()));
+        std::env::set_var("AGENTPARTY_DESKTOP_DATA_DIR", &root);
+        let workdir = root.join("workdir");
+        let config = LocalAgentConfig {
+            id: "agent-1".to_string(),
+            name: "bot".to_string(),
+            channel_id: "chan-1".to_string(),
+            runner_kind: RunnerKind::Codex,
+            workdir: workdir.to_string_lossy().to_string(),
+            sending_policy: SendingPolicy::Draft,
+            created_at: 1,
+            updated_at: 1,
+        };
+        let context = serde_json::json!({
+            "triggeringMessage": {
+                "id": "msg-1",
+                "body": "please help"
+            }
+        });
+
+        let result = run_codex_runner_with_executor(config, context, |context_path, final_path| {
+            assert!(context_path.exists());
+            fs::write(final_path, "draft from codex\n").expect("final message should write");
+            Ok(CodexProcessOutput {
+                stdout: "{\"type\":\"session.started\",\"session_id\":\"sess-1\"}\n".to_string(),
+                stderr: "useful warning".to_string(),
+                exit_code: 0,
+            })
+        })
+        .expect("codex runner should normalize success");
+
+        assert_eq!(result.status, "done");
+        assert_eq!(result.draft_reply, "draft from codex");
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("sess-1"));
+        assert!(result.stdout.contains("[codex session_ids: sess-1]"));
+        let logs = read_runner_logs().expect("runner logs should be readable");
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].draft_reply, "draft from codex");
+        std::env::remove_var("AGENTPARTY_DESKTOP_DATA_DIR");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn codex_runner_normalizes_fake_process_failure_as_blocked() {
+        let _guard = TEST_MUTEX.lock().expect("test lock poisoned");
+        let root = std::env::temp_dir().join(format!("agentparty-desktop-test-{}", unix_now_millis()));
+        std::env::set_var("AGENTPARTY_DESKTOP_DATA_DIR", &root);
+        let workdir = root.join("workdir");
+        let config = LocalAgentConfig {
+            id: "agent-1".to_string(),
+            name: "bot".to_string(),
+            channel_id: "chan-1".to_string(),
+            runner_kind: RunnerKind::Codex,
+            workdir: workdir.to_string_lossy().to_string(),
+            sending_policy: SendingPolicy::Draft,
+            created_at: 1,
+            updated_at: 1,
+        };
+        let context = serde_json::json!({
+            "triggeringMessage": {
+                "id": "msg-1",
+                "body": "please help"
+            }
+        });
+
+        let result =
+            run_codex_runner_with_executor(config, context, |_context_path, _final_path| {
+                Ok(CodexProcessOutput {
+                    stdout: "{\"type\":\"session.started\",\"session_id\":\"sess-1\"}\n"
+                        .to_string(),
+                    stderr: "model failed".to_string(),
+                    exit_code: 2,
+                })
+            })
+            .expect("codex runner should return blocked result");
+
+        assert_eq!(result.status, "blocked");
+        assert_eq!(result.draft_reply, "");
+        assert_eq!(result.stderr, "model failed");
+        assert_eq!(result.exit_code, 2);
+        let logs = read_runner_logs().expect("runner logs should be readable");
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].status, "blocked");
         std::env::remove_var("AGENTPARTY_DESKTOP_DATA_DIR");
         let _ = fs::remove_dir_all(root);
     }

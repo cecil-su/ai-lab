@@ -88,7 +88,7 @@ export type ServerProfileInput = {
   token: string;
 };
 
-export type RunnerKind = "fake";
+export type RunnerKind = "fake" | "codex";
 export type SendingPolicy = "draft" | "auto-send";
 
 export type LocalAgentConfig = {

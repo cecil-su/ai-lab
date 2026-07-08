@@ -314,6 +314,10 @@ function AgentConfigPanel({
         <input value={input.name} onChange={(event) => setInput({ ...input, name: event.target.value })} placeholder="Agent name" required />
         <input value={input.channelId} onChange={(event) => setInput({ ...input, channelId: event.target.value })} placeholder="Channel ID" required />
         <input value={input.workdir} onChange={(event) => setInput({ ...input, workdir: event.target.value })} placeholder="Workdir" required />
+        <select value={input.runnerKind} onChange={(event) => setInput({ ...input, runnerKind: event.target.value as LocalAgentConfigInput["runnerKind"] })}>
+          <option value="fake">Fake</option>
+          <option value="codex">Codex</option>
+        </select>
         <select value={input.sendingPolicy} onChange={(event) => setInput({ ...input, sendingPolicy: event.target.value as LocalAgentConfigInput["sendingPolicy"] })}>
           <option value="draft">Draft</option>
           <option value="auto-send">Auto-send</option>

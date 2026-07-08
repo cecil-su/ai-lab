@@ -101,7 +101,7 @@ export class LocalRelay {
 
     const context = buildRunnerContext(this.config, message, this.recentMessages);
     try {
-      const result = await this.runner.runFakeRunner(this.config, context);
+      const result = await this.runner.runRunner(this.config, context);
       await this.handleRunnerResult(message, result);
       this.processedMessageIds.add(message.id);
       this.set({

@@ -112,6 +112,26 @@ describe("LocalRelay", () => {
     expect(relay.getSnapshot().processedMessageIds).toEqual(["msg-2"]);
   });
 
+  it("routes codex configs to the codex runner", async () => {
+    await relay.start({
+      profile,
+      token: "token",
+      config: { ...config, runnerKind: "codex" },
+      recentMessages: [],
+      lastSequence: 1,
+    });
+    await relay.handleEvent({ type: "Message", payload: message(2, "please help") });
+
+    expect(runner.logs).toHaveLength(1);
+    expect(runner.logs[0]?.stdout).toContain("codex runner handled msg-2");
+    await expect(pendingQueue.listPendingDrafts()).resolves.toEqual([
+      expect.objectContaining({
+        status: "pending",
+        body: expect.stringContaining("Codex runner bot"),
+      }),
+    ]);
+  });
+
   it("creates pending draft replies from successful fake runner results by default", async () => {
     await relay.start({ profile, token: "token", config, recentMessages: [], lastSequence: 1 });
     await relay.handleEvent({ type: "Message", payload: message(2, "please help") });
@@ -143,7 +163,7 @@ describe("LocalRelay", () => {
   it("creates blocked pending items when the runner fails", async () => {
     const failingRunner: RunnerService = {
       listRunnerLogs: async () => [],
-      runFakeRunner: async () => {
+      runRunner: async () => {
         throw new Error("runner failed");
       },
     };
