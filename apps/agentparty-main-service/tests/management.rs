@@ -167,6 +167,7 @@ async fn management_page_exposes_channel_token_and_revoke_controls_after_login()
     let html = String::from_utf8(body.to_vec()).expect("html");
     assert!(html.contains("channel-list"));
     assert!(html.contains("token-list"));
+    assert!(html.contains("/archive"));
     assert!(html.contains("/revoke"));
 }
 

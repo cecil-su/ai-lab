@@ -1,3 +1,9 @@
+import type {
+  ChannelHistoryResponse as ContractChannelHistoryResponse,
+  ChannelLoopGuard as ContractChannelLoopGuard,
+  ChannelResponse as ContractChannelResponse,
+} from "../../agentparty-main-service/protocol/agentparty-contract";
+
 export type ChannelMode = "normal" | "party";
 export type TokenKind = "human" | "agent";
 export type ParticipantStatusState = "waiting" | "working" | "blocked" | "done";
@@ -11,12 +17,8 @@ export type TokenMetadata = {
   revoked_at: number | null;
 };
 
-export type ChannelResponse = {
-  id: string;
-  name: string;
-  mode: ChannelMode;
-  created_at: number;
-};
+export type ChannelResponse = ContractChannelResponse;
+export type ChannelLoopGuard = ContractChannelLoopGuard;
 
 export type PostMessageRequest = {
   body: string;
@@ -29,10 +31,7 @@ export type PostStatusRequest = {
   scope: string | null;
 };
 
-export type ChannelHistoryResponse = {
-  events: ChannelEvent[];
-  last_sequence: number;
-};
+export type ChannelHistoryResponse = ContractChannelHistoryResponse;
 
 export type ChannelEvent =
   | { type: "Message"; payload: ChannelMessage }

@@ -12,6 +12,12 @@ const human: TokenMetadata = {
   revoked_at: null,
 };
 
+const loopGuard = {
+  consecutive_agent_messages: 0,
+  threshold: 3,
+  blocked: false,
+};
+
 function message(sequence: number, body: string, replyTo: string | null = null): ChannelMessage {
   return {
     id: `msg-${sequence}`,
@@ -44,7 +50,7 @@ class FakeProtocolClient implements ProtocolClient {
     this.loadAfter.set(profile.channelId, afterSequence);
     const history = this.history.get(profile.channelId) ?? [];
     const events = afterSequence ? history.filter((event) => "sequence" in event.payload && event.payload.sequence > afterSequence) : history;
-    return { events, last_sequence: events.reduce((max, event) => ("sequence" in event.payload ? Math.max(max, event.payload.sequence) : max), afterSequence ?? 0) };
+    return { events, last_sequence: events.reduce((max, event) => ("sequence" in event.payload ? Math.max(max, event.payload.sequence) : max), afterSequence ?? 0), loop_guard: loopGuard };
   }
 
   async postMessage(profile: ServerProfile, _token: string, request: { body: string; reply_to_message_id: string | null }) {

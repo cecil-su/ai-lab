@@ -99,14 +99,14 @@ async fn login(app: axum::Router) -> String {
         .to_string()
 }
 
-async fn create_channel(app: axum::Router, cookie: &str) -> String {
+async fn create_channel(app: axum::Router, cookie: &str, mode: &str) -> String {
     let (status, _, channel) = request(
         app,
         Method::POST,
         "/admin/api/channels",
         Some(cookie),
         None,
-        json!({ "name": "general", "mode": "normal" }),
+        json!({ "name": format!("{mode}-channel"), "mode": mode }),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
@@ -144,7 +144,7 @@ async fn authenticated_rest_send_status_and_history_catch_up_persist_after_resta
     let database_path = tempdir.path().join("service.sqlite3");
     let app = build_router(config(database_path.clone())).expect("router");
     let cookie = login(app.clone()).await;
-    let channel_id = create_channel(app.clone(), &cookie).await;
+    let channel_id = create_channel(app.clone(), &cookie, "normal").await;
     let (_, human_token) = mint_token(app.clone(), &cookie, "human", "Ada").await;
 
     let (message_status, _, message) = request(
@@ -201,7 +201,7 @@ async fn invalid_and_revoked_tokens_are_rejected_from_rest() {
     let tempdir = tempdir().expect("tempdir");
     let app = build_router(config(tempdir.path().join("service.sqlite3"))).expect("router");
     let cookie = login(app.clone()).await;
-    let channel_id = create_channel(app.clone(), &cookie).await;
+    let channel_id = create_channel(app.clone(), &cookie, "normal").await;
     let (token_id, token) = mint_token(app.clone(), &cookie, "agent", "bot").await;
 
     let (invalid_status, _, _) = request(
@@ -244,7 +244,7 @@ async fn websocket_receives_welcome_message_delivery_and_rejects_invalid_token()
     let database_path = tempdir.path().join("service.sqlite3");
     let app = build_router(config(database_path)).expect("router");
     let cookie = login(app.clone()).await;
-    let channel_id = create_channel(app.clone(), &cookie).await;
+    let channel_id = create_channel(app.clone(), &cookie, "normal").await;
     let (_, token) = mint_token(app.clone(), &cookie, "human", "Ada").await;
     let (revoked_token_id, revoked_token) = mint_token(app.clone(), &cookie, "agent", "bot").await;
 
@@ -323,6 +323,219 @@ async fn websocket_receives_welcome_message_delivery_and_rejects_invalid_token()
     assert!(sent["payload"]["sequence"].as_i64().expect("sequence") >= 3);
 
     server_task.abort();
+}
+
+#[tokio::test]
+async fn normal_channel_rejects_agent_message_after_strict_loop_guard_threshold() {
+    let tempdir = tempdir().expect("tempdir");
+    let app = build_router(config(tempdir.path().join("service.sqlite3"))).expect("router");
+    let cookie = login(app.clone()).await;
+    let channel_id = create_channel(app.clone(), &cookie, "normal").await;
+    let (_, agent_token) = mint_token(app.clone(), &cookie, "agent", "bot").await;
+
+    for index in 1..=3 {
+        let (status, _, message) = request(
+            app.clone(),
+            Method::POST,
+            &format!("/api/channels/{channel_id}/messages"),
+            None,
+            Some(&agent_token),
+            json!({ "body": format!("agent {index}"), "mentions": [], "reply_to_message_id": null }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(message["sequence"], index);
+    }
+
+    let (blocked_status, _, blocked) = request(
+        app.clone(),
+        Method::POST,
+        &format!("/api/channels/{channel_id}/messages"),
+        None,
+        Some(&agent_token),
+        json!({ "body": "agent 4", "mentions": [], "reply_to_message_id": null }),
+    )
+    .await;
+    assert_eq!(blocked_status, StatusCode::CONFLICT);
+    assert_eq!(blocked["error"]["code"], "loop_guard_blocked");
+    assert!(blocked["error"]["message"]
+        .as_str()
+        .expect("message")
+        .contains("human message"));
+
+    let (history_status, _, history) = request(
+        app,
+        Method::GET,
+        &format!("/api/channels/{channel_id}/events"),
+        None,
+        Some(&agent_token),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(history_status, StatusCode::OK);
+    assert_eq!(history["loop_guard"]["consecutive_agent_messages"], 3);
+    assert_eq!(history["loop_guard"]["threshold"], 3);
+    assert_eq!(history["loop_guard"]["blocked"], true);
+}
+
+#[tokio::test]
+async fn party_channel_uses_relaxed_loop_guard_threshold() {
+    let tempdir = tempdir().expect("tempdir");
+    let app = build_router(config(tempdir.path().join("service.sqlite3"))).expect("router");
+    let cookie = login(app.clone()).await;
+    let channel_id = create_channel(app.clone(), &cookie, "party").await;
+    let (_, agent_token) = mint_token(app.clone(), &cookie, "agent", "bot").await;
+
+    for index in 1..=8 {
+        let (status, _, _) = request(
+            app.clone(),
+            Method::POST,
+            &format!("/api/channels/{channel_id}/messages"),
+            None,
+            Some(&agent_token),
+            json!({ "body": format!("party agent {index}"), "mentions": [], "reply_to_message_id": null }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+
+    let (blocked_status, _, blocked) = request(
+        app,
+        Method::POST,
+        &format!("/api/channels/{channel_id}/messages"),
+        None,
+        Some(&agent_token),
+        json!({ "body": "party agent 9", "mentions": [], "reply_to_message_id": null }),
+    )
+    .await;
+    assert_eq!(blocked_status, StatusCode::CONFLICT);
+    assert_eq!(blocked["error"]["code"], "loop_guard_blocked");
+}
+
+#[tokio::test]
+async fn human_message_resets_channel_loop_guard() {
+    let tempdir = tempdir().expect("tempdir");
+    let app = build_router(config(tempdir.path().join("service.sqlite3"))).expect("router");
+    let cookie = login(app.clone()).await;
+    let channel_id = create_channel(app.clone(), &cookie, "normal").await;
+    let (_, agent_token) = mint_token(app.clone(), &cookie, "agent", "bot").await;
+    let (_, human_token) = mint_token(app.clone(), &cookie, "human", "Ada").await;
+
+    for index in 1..=3 {
+        let (status, _, _) = request(
+            app.clone(),
+            Method::POST,
+            &format!("/api/channels/{channel_id}/messages"),
+            None,
+            Some(&agent_token),
+            json!({ "body": format!("agent {index}"), "mentions": [], "reply_to_message_id": null }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+
+    let (human_status, _, _) = request(
+        app.clone(),
+        Method::POST,
+        &format!("/api/channels/{channel_id}/messages"),
+        None,
+        Some(&human_token),
+        json!({ "body": "reset", "mentions": [], "reply_to_message_id": null }),
+    )
+    .await;
+    assert_eq!(human_status, StatusCode::CREATED);
+
+    let (agent_status, _, _) = request(
+        app.clone(),
+        Method::POST,
+        &format!("/api/channels/{channel_id}/messages"),
+        None,
+        Some(&agent_token),
+        json!({ "body": "agent after reset", "mentions": [], "reply_to_message_id": null }),
+    )
+    .await;
+    assert_eq!(agent_status, StatusCode::CREATED);
+
+    let (history_status, _, history) = request(
+        app,
+        Method::GET,
+        &format!("/api/channels/{channel_id}/events"),
+        None,
+        Some(&agent_token),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(history_status, StatusCode::OK);
+    assert_eq!(history["loop_guard"]["consecutive_agent_messages"], 1);
+    assert_eq!(history["loop_guard"]["blocked"], false);
+}
+
+#[tokio::test]
+async fn archived_channel_history_stays_readable_and_writes_are_rejected() {
+    let tempdir = tempdir().expect("tempdir");
+    let app = build_router(config(tempdir.path().join("service.sqlite3"))).expect("router");
+    let cookie = login(app.clone()).await;
+    let channel_id = create_channel(app.clone(), &cookie, "normal").await;
+    let (_, human_token) = mint_token(app.clone(), &cookie, "human", "Ada").await;
+
+    let (message_status, _, _) = request(
+        app.clone(),
+        Method::POST,
+        &format!("/api/channels/{channel_id}/messages"),
+        None,
+        Some(&human_token),
+        json!({ "body": "before archive", "mentions": [], "reply_to_message_id": null }),
+    )
+    .await;
+    assert_eq!(message_status, StatusCode::CREATED);
+
+    let (archive_status, _, archived) = request(
+        app.clone(),
+        Method::POST,
+        &format!("/admin/api/channels/{channel_id}/archive"),
+        Some(&cookie),
+        None,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(archive_status, StatusCode::OK);
+    assert!(archived["archived_at"].as_i64().is_some());
+
+    let (history_status, _, history) = request(
+        app.clone(),
+        Method::GET,
+        &format!("/api/channels/{channel_id}/events"),
+        None,
+        Some(&human_token),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(history_status, StatusCode::OK);
+    assert_eq!(history["events"].as_array().expect("events").len(), 1);
+
+    let (message_rejected_status, _, message_rejected) = request(
+        app.clone(),
+        Method::POST,
+        &format!("/api/channels/{channel_id}/messages"),
+        None,
+        Some(&human_token),
+        json!({ "body": "after archive", "mentions": [], "reply_to_message_id": null }),
+    )
+    .await;
+    assert_eq!(message_rejected_status, StatusCode::CONFLICT);
+    assert_eq!(message_rejected["error"]["code"], "channel_archived");
+
+    let (status_rejected_status, _, status_rejected) = request(
+        app,
+        Method::POST,
+        &format!("/api/channels/{channel_id}/status"),
+        None,
+        Some(&human_token),
+        json!({ "state": "done" }),
+    )
+    .await;
+    assert_eq!(status_rejected_status, StatusCode::CONFLICT);
+    assert_eq!(status_rejected["error"]["code"], "channel_archived");
 }
 
 async fn spawn_server(app: axum::Router) -> (SocketAddr, tokio::task::JoinHandle<()>) {

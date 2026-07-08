@@ -15,9 +15,11 @@ export type AdminLoginResponse = { ok: boolean, expires_in_seconds: number, };
 
 export type CreateChannelRequest = { name: string, mode: ChannelMode, };
 
-export type ChannelResponse = { id: string, name: string, mode: ChannelMode, created_at: number, };
+export type ChannelResponse = { id: string, name: string, mode: ChannelMode, created_at: number, archived_at: number | null, loop_guard: ChannelLoopGuard, };
 
 export type ChannelMode = "normal" | "party";
+
+export type ChannelLoopGuard = { consecutive_agent_messages: number, threshold: number, blocked: boolean, };
 
 export type MintTokenRequest = { kind: TokenKind, owner_label: string, };
 
@@ -33,7 +35,7 @@ export type PostMessageRequest = { body: string, mentions: Array<string>, reply_
 
 export type PostStatusRequest = { state: ParticipantStatusState, scope: string | null, };
 
-export type ChannelHistoryResponse = { events: Array<ChannelEvent>, last_sequence: number, };
+export type ChannelHistoryResponse = { events: Array<ChannelEvent>, last_sequence: number, loop_guard: ChannelLoopGuard, };
 
 export type WebSocketClientFrame = { "type": "Message", "payload": PostMessageRequest } | { "type": "Status", "payload": PostStatusRequest };
 

@@ -1,9 +1,12 @@
 use crate::protocol::{
-    ChannelEvent, ChannelMessage, ParticipantStatusState, StatusUpdate, TokenMetadata,
+    ChannelEvent, ChannelLoopGuard, ChannelMessage, ParticipantStatusState, StatusUpdate,
+    TokenMetadata,
 };
 use rusqlite::Connection;
+use rusqlite::Row;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::fmt;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -16,6 +19,7 @@ pub struct ChannelRecord {
     pub name: String,
     pub mode: String,
     pub created_at: i64,
+    pub archived_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -26,6 +30,41 @@ pub struct TokenRecord {
     pub created_at: i64,
     pub revoked_at: Option<i64>,
 }
+
+pub const NORMAL_LOOP_GUARD_THRESHOLD: i64 = 3;
+pub const PARTY_LOOP_GUARD_THRESHOLD: i64 = 8;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannelWriteError {
+    ChannelArchived,
+    LoopGuardBlocked,
+}
+
+impl ChannelWriteError {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::ChannelArchived => "channel_archived",
+            Self::LoopGuardBlocked => "loop_guard_blocked",
+        }
+    }
+
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::ChannelArchived => "archived channels are read-only",
+            Self::LoopGuardBlocked => {
+                "channel loop guard blocked agent messages until a human message resets it"
+            }
+        }
+    }
+}
+
+impl fmt::Display for ChannelWriteError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.message())
+    }
+}
+
+impl std::error::Error for ChannelWriteError {}
 
 pub fn open_database(path: &Path) -> anyhow::Result<Connection> {
     if let Some(parent) = path.parent() {
@@ -78,7 +117,15 @@ fn migrate(connection: &Connection) -> anyhow::Result<()> {
         VALUES ('schema_version', '1');
         "#,
     )?;
-
+    let mut columns = connection.prepare("PRAGMA table_info(channels)")?;
+    let has_archived_at = columns
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?
+        .iter()
+        .any(|name| name == "archived_at");
+    if !has_archived_at {
+        connection.execute("ALTER TABLE channels ADD COLUMN archived_at INTEGER", [])?;
+    }
     Ok(())
 }
 
@@ -97,9 +144,10 @@ pub fn create_channel(path: &Path, name: &str, mode: &str) -> anyhow::Result<Cha
         name: name.to_string(),
         mode: mode.to_string(),
         created_at: unix_now(),
+        archived_at: None,
     };
     connection.execute(
-        "INSERT INTO channels (id, name, mode, created_at) VALUES (?1, ?2, ?3, ?4)",
+        "INSERT INTO channels (id, name, mode, created_at, archived_at) VALUES (?1, ?2, ?3, ?4, NULL)",
         (&record.id, &record.name, &record.mode, record.created_at),
     )?;
     Ok(record)
@@ -107,35 +155,38 @@ pub fn create_channel(path: &Path, name: &str, mode: &str) -> anyhow::Result<Cha
 
 pub fn list_channels(path: &Path) -> anyhow::Result<Vec<ChannelRecord>> {
     let connection = open_database(path)?;
-    let mut statement = connection
-        .prepare("SELECT id, name, mode, created_at FROM channels ORDER BY created_at ASC")?;
-    let rows = statement.query_map([], |row| {
-        Ok(ChannelRecord {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            mode: row.get(2)?,
-            created_at: row.get(3)?,
-        })
-    })?;
+    let mut statement = connection.prepare(
+        "SELECT id, name, mode, created_at, archived_at FROM channels ORDER BY created_at ASC",
+    )?;
+    let rows = statement.query_map([], channel_record_from_row)?;
 
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
 }
 
 pub fn channel_by_id(path: &Path, channel_id: &str) -> anyhow::Result<Option<ChannelRecord>> {
     let connection = open_database(path)?;
-    let mut statement =
-        connection.prepare("SELECT id, name, mode, created_at FROM channels WHERE id = ?1")?;
+    let mut statement = connection
+        .prepare("SELECT id, name, mode, created_at, archived_at FROM channels WHERE id = ?1")?;
     let mut rows = statement.query([channel_id])?;
     let Some(row) = rows.next()? else {
         return Ok(None);
     };
 
-    Ok(Some(ChannelRecord {
-        id: row.get(0)?,
-        name: row.get(1)?,
-        mode: row.get(2)?,
-        created_at: row.get(3)?,
-    }))
+    channel_record_from_row(row).map(Some).map_err(Into::into)
+}
+
+pub fn archive_channel(path: &Path, channel_id: &str) -> anyhow::Result<Option<ChannelRecord>> {
+    let connection = open_database(path)?;
+    let archived_at = unix_now();
+    let changed = connection.execute(
+        "UPDATE channels SET archived_at = COALESCE(archived_at, ?1) WHERE id = ?2",
+        (archived_at, channel_id),
+    )?;
+    if changed == 0 {
+        return Ok(None);
+    }
+
+    get_channel_by_id(&connection, channel_id).map(Some)
 }
 
 pub fn mint_token(
@@ -242,9 +293,11 @@ pub fn append_message_event(
         anyhow::bail!("message body is required");
     }
     let connection = open_database(path)?;
-    ensure_channel_exists(&connection, channel_id)?;
     connection.execute("BEGIN IMMEDIATE", [])?;
     let inserted = (|| -> anyhow::Result<ChannelEvent> {
+        let channel = get_channel_by_id(&connection, channel_id)?;
+        ensure_channel_open(&channel)?;
+        ensure_loop_guard_allows_agent_message(&connection, &channel, &sender)?;
         let sequence = next_sequence(&connection, channel_id)?;
         let created_at = unix_now();
         let event = ChannelEvent::Message(ChannelMessage {
@@ -278,9 +331,10 @@ pub fn append_status_event(
     scope: Option<String>,
 ) -> anyhow::Result<ChannelEvent> {
     let connection = open_database(path)?;
-    ensure_channel_exists(&connection, channel_id)?;
     connection.execute("BEGIN IMMEDIATE", [])?;
     let inserted = (|| -> anyhow::Result<ChannelEvent> {
+        let channel = get_channel_by_id(&connection, channel_id)?;
+        ensure_channel_open(&channel)?;
         let sequence = next_sequence(&connection, channel_id)?;
         let created_at = unix_now();
         let event = ChannelEvent::Status(StatusUpdate {
@@ -340,6 +394,20 @@ pub fn last_channel_sequence(path: &Path, channel_id: &str) -> anyhow::Result<i6
     last_sequence(&connection, channel_id)
 }
 
+pub fn channel_loop_guard(path: &Path, channel_id: &str) -> anyhow::Result<ChannelLoopGuard> {
+    let connection = open_database(path)?;
+    let channel = get_channel_by_id(&connection, channel_id)?;
+    channel_loop_guard_for(&connection, &channel)
+}
+
+fn get_channel_by_id(connection: &Connection, channel_id: &str) -> anyhow::Result<ChannelRecord> {
+    Ok(connection.query_row(
+        "SELECT id, name, mode, created_at, archived_at FROM channels WHERE id = ?1",
+        [channel_id],
+        channel_record_from_row,
+    )?)
+}
+
 fn get_token_by_id(connection: &Connection, token_id: &str) -> anyhow::Result<TokenRecord> {
     Ok(connection.query_row(
         "SELECT id, kind, owner_label, created_at, revoked_at FROM tokens WHERE id = ?1",
@@ -366,6 +434,77 @@ fn ensure_channel_exists(connection: &Connection, channel_id: &str) -> anyhow::R
         anyhow::bail!("channel not found");
     }
     Ok(())
+}
+
+fn ensure_channel_open(channel: &ChannelRecord) -> anyhow::Result<()> {
+    if channel.archived_at.is_some() {
+        return Err(ChannelWriteError::ChannelArchived.into());
+    }
+    Ok(())
+}
+
+fn ensure_loop_guard_allows_agent_message(
+    connection: &Connection,
+    channel: &ChannelRecord,
+    sender: &TokenMetadata,
+) -> anyhow::Result<()> {
+    if sender.kind != crate::protocol::TokenKind::Agent {
+        return Ok(());
+    }
+    let guard = channel_loop_guard_for(connection, channel)?;
+    if guard.consecutive_agent_messages >= guard.threshold {
+        return Err(ChannelWriteError::LoopGuardBlocked.into());
+    }
+    Ok(())
+}
+
+fn channel_record_from_row(row: &Row<'_>) -> rusqlite::Result<ChannelRecord> {
+    Ok(ChannelRecord {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        mode: row.get(2)?,
+        created_at: row.get(3)?,
+        archived_at: row.get(4)?,
+    })
+}
+
+fn channel_loop_guard_for(
+    connection: &Connection,
+    channel: &ChannelRecord,
+) -> anyhow::Result<ChannelLoopGuard> {
+    let threshold = loop_guard_threshold(&channel.mode);
+    let mut statement = connection.prepare(
+        "SELECT payload_json FROM channel_events
+         WHERE channel_id = ?1 AND kind = 'message'
+         ORDER BY sequence DESC",
+    )?;
+    let rows = statement.query_map([channel.id.as_str()], |row| row.get::<_, String>(0))?;
+    let mut consecutive_agent_messages = 0;
+    for row in rows {
+        let payload = row?;
+        let event: ChannelEvent = serde_json::from_str(&payload)?;
+        let ChannelEvent::Message(message) = event else {
+            continue;
+        };
+        if message.sender.kind == crate::protocol::TokenKind::Agent {
+            consecutive_agent_messages += 1;
+        } else {
+            break;
+        }
+    }
+
+    Ok(ChannelLoopGuard {
+        consecutive_agent_messages,
+        threshold,
+        blocked: consecutive_agent_messages >= threshold,
+    })
+}
+
+fn loop_guard_threshold(mode: &str) -> i64 {
+    match mode {
+        "party" => PARTY_LOOP_GUARD_THRESHOLD,
+        _ => NORMAL_LOOP_GUARD_THRESHOLD,
+    }
 }
 
 fn next_sequence(connection: &Connection, channel_id: &str) -> anyhow::Result<i64> {

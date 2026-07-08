@@ -13,6 +13,12 @@ const sender: TokenMetadata = {
   revoked_at: null,
 };
 
+const loopGuard = {
+  consecutive_agent_messages: 0,
+  threshold: 3,
+  blocked: false,
+};
+
 const input: PendingDraftInput = {
   profileId: "profile-1",
   serverUrl: "http://127.0.0.1:4180",
@@ -30,7 +36,7 @@ class FakeProtocolClient implements ProtocolClient {
   posts: { body: string; replyTo: string | null; token: string }[] = [];
 
   async loadHistory() {
-    return { events: [], last_sequence: 0 };
+    return { events: [], last_sequence: 0, loop_guard: loopGuard };
   }
 
   async postMessage(_profile: ServerProfile, token: string, request: { body: string; reply_to_message_id: string | null }): Promise<ChannelMessage> {

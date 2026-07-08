@@ -1,6 +1,6 @@
 use agentparty_main_service::protocol::{
-    generated_typescript_contract, health_response, ChannelMode, ChannelResponse, ProtocolError,
-    TokenKind, TokenMetadata, WebSocketFrame, WebSocketWelcomeFrame,
+    generated_typescript_contract, health_response, ChannelLoopGuard, ChannelMode, ChannelResponse,
+    ProtocolError, TokenKind, TokenMetadata, WebSocketFrame, WebSocketWelcomeFrame,
 };
 
 #[test]
@@ -40,6 +40,12 @@ fn websocket_frame_json_shape_is_stable() {
             name: "general".to_string(),
             mode: ChannelMode::Normal,
             created_at: 99,
+            archived_at: None,
+            loop_guard: ChannelLoopGuard {
+                consecutive_agent_messages: 2,
+                threshold: 3,
+                blocked: false,
+            },
         },
         self_token: token,
         participants: Vec::new(),
@@ -53,7 +59,7 @@ fn websocket_frame_json_shape_is_stable() {
 
     assert_eq!(
         serde_json::to_string(&welcome).expect("welcome json"),
-        r#"{"type":"Welcome","payload":{"channel":{"id":"chan_123","name":"general","mode":"normal","created_at":99},"self_token":{"id":"tok_123","kind":"human","owner_label":"Ada","created_at":100,"revoked_at":null},"participants":[],"last_sequence":7,"protocol_version":1}}"#
+        r#"{"type":"Welcome","payload":{"channel":{"id":"chan_123","name":"general","mode":"normal","created_at":99,"archived_at":null,"loop_guard":{"consecutive_agent_messages":2,"threshold":3,"blocked":false}},"self_token":{"id":"tok_123","kind":"human","owner_label":"Ada","created_at":100,"revoked_at":null},"participants":[],"last_sequence":7,"protocol_version":1}}"#
     );
     assert_eq!(
         serde_json::to_string(&error).expect("error json"),

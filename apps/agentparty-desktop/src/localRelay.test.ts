@@ -19,6 +19,12 @@ const agentSender: TokenMetadata = {
   owner_label: "bot",
 };
 
+const loopGuard = {
+  consecutive_agent_messages: 0,
+  threshold: 3,
+  blocked: false,
+};
+
 const profile: ServerProfile = {
   id: "profile-1",
   name: "Local",
@@ -59,7 +65,7 @@ class FakeProtocolClient implements ProtocolClient {
   watcher: ((event: ChannelEvent) => void) | null = null;
 
   async loadHistory() {
-    return { events: [], last_sequence: 0 };
+    return { events: [], last_sequence: 0, loop_guard: loopGuard };
   }
 
   async postMessage(_profile: ServerProfile, _token: string, request: { body: string; reply_to_message_id: string | null }) {

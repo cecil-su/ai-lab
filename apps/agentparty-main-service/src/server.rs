@@ -1,8 +1,9 @@
 use crate::db::{
-    append_message_event, append_status_event, authenticate_token, channel_by_id,
-    create_channel as db_create_channel, last_channel_sequence, list_channel_events,
-    list_channels as db_list_channels, list_tokens as db_list_tokens, mint_token as db_mint_token,
-    open_database, revoke_token as db_revoke_token, ChannelRecord, TokenRecord,
+    append_message_event, append_status_event, archive_channel as db_archive_channel,
+    authenticate_token, channel_by_id, channel_loop_guard, create_channel as db_create_channel,
+    last_channel_sequence, list_channel_events, list_channels as db_list_channels,
+    list_tokens as db_list_tokens, mint_token as db_mint_token, open_database,
+    revoke_token as db_revoke_token, ChannelRecord, ChannelWriteError, TokenRecord,
 };
 use crate::protocol::{
     health_response, AdminLoginRequest, AdminLoginResponse, AuthenticatedTokenResponse,
@@ -53,6 +54,10 @@ pub fn build_router(config: ServiceConfig) -> anyhow::Result<Router> {
         .route(
             "/admin/api/channels",
             get(list_channels).post(create_channel),
+        )
+        .route(
+            "/admin/api/channels/{channel_id}/archive",
+            post(archive_channel),
         )
         .route("/admin/api/tokens", get(list_tokens).post(mint_token))
         .route("/admin/api/tokens/{token_id}/revoke", post(revoke_token))
@@ -156,7 +161,14 @@ async fn create_channel(
         payload.name.as_str(),
         channel_mode_str(&payload.mode),
     ) {
-        Ok(channel) => (StatusCode::CREATED, Json(channel_response(channel))).into_response(),
+        Ok(channel) => match channel_response(&state.database_path, channel) {
+            Ok(channel) => (StatusCode::CREATED, Json(channel)).into_response(),
+            Err(_) => json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "Internal error",
+            ),
+        },
         Err(_) => json_error(
             StatusCode::BAD_REQUEST,
             "bad_request",
@@ -174,10 +186,44 @@ async fn list_channels(State(state): State<AppState>, headers: HeaderMap) -> Res
         Ok(channels) => {
             let channels = channels
                 .into_iter()
-                .map(channel_response)
-                .collect::<Vec<_>>();
-            Json(channels).into_response()
+                .map(|channel| channel_response(&state.database_path, channel))
+                .collect::<anyhow::Result<Vec<_>>>();
+            match channels {
+                Ok(channels) => Json(channels).into_response(),
+                Err(_) => json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "Internal error",
+                ),
+            }
         }
+        Err(_) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "Internal error",
+        ),
+    }
+}
+
+async fn archive_channel(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(channel_id): AxumPath<String>,
+) -> Response {
+    if let Err(response) = require_admin_session(&state, &headers) {
+        return response;
+    }
+
+    match db_archive_channel(&state.database_path, &channel_id) {
+        Ok(Some(channel)) => match channel_response(&state.database_path, channel) {
+            Ok(channel) => Json(channel).into_response(),
+            Err(_) => json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "Internal error",
+            ),
+        },
+        Ok(None) => json_error(StatusCode::NOT_FOUND, "not_found", "Channel not found"),
         Err(_) => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
@@ -300,11 +346,7 @@ async fn post_channel_message(
             "internal_error",
             "Internal error",
         ),
-        Err(_) => json_error(
-            StatusCode::BAD_REQUEST,
-            "bad_request",
-            "Invalid message request",
-        ),
+        Err(err) => write_error_response(err),
     }
 }
 
@@ -334,11 +376,7 @@ async fn post_channel_status(
             "internal_error",
             "Internal error",
         ),
-        Err(_) => json_error(
-            StatusCode::BAD_REQUEST,
-            "bad_request",
-            "Invalid status request",
-        ),
+        Err(err) => write_error_response(err),
     }
 }
 
@@ -359,10 +397,12 @@ async fn channel_history(
     match (
         list_channel_events(&state.database_path, &channel_id, after_sequence),
         last_channel_sequence(&state.database_path, &channel_id),
+        channel_loop_guard(&state.database_path, &channel_id),
     ) {
-        (Ok(events), Ok(last_sequence)) => Json(ChannelHistoryResponse {
+        (Ok(events), Ok(last_sequence), Ok(loop_guard)) => Json(ChannelHistoryResponse {
             events,
             last_sequence,
+            loop_guard,
         })
         .into_response(),
         _ => json_error(StatusCode::NOT_FOUND, "not_found", "Channel not found"),
@@ -465,8 +505,32 @@ fn json_error(status: StatusCode, code: &str, message: &str) -> Response {
         .into_response()
 }
 
-fn channel_response(record: ChannelRecord) -> ChannelResponse {
-    ChannelResponse {
+fn write_error_response(err: anyhow::Error) -> Response {
+    if let Some(err) = err.downcast_ref::<ChannelWriteError>() {
+        return json_error(StatusCode::CONFLICT, err.code(), err.message());
+    }
+    json_error(StatusCode::BAD_REQUEST, "bad_request", "Invalid request")
+}
+
+fn write_protocol_error(err: anyhow::Error) -> ProtocolError {
+    if let Some(err) = err.downcast_ref::<ChannelWriteError>() {
+        return ProtocolError {
+            code: err.code().to_string(),
+            message: err.message().to_string(),
+        };
+    }
+    ProtocolError {
+        code: "bad_request".to_string(),
+        message: "Invalid request".to_string(),
+    }
+}
+
+fn channel_response(
+    database_path: &std::path::Path,
+    record: ChannelRecord,
+) -> anyhow::Result<ChannelResponse> {
+    let loop_guard = channel_loop_guard(database_path, &record.id)?;
+    Ok(ChannelResponse {
         id: record.id,
         name: record.name,
         mode: match record.mode.as_str() {
@@ -474,7 +538,9 @@ fn channel_response(record: ChannelRecord) -> ChannelResponse {
             _ => ChannelMode::Normal,
         },
         created_at: record.created_at,
-    }
+        archived_at: record.archived_at,
+        loop_guard,
+    })
 }
 
 fn token_metadata(record: TokenRecord) -> TokenMetadata {
@@ -488,10 +554,6 @@ fn token_metadata(record: TokenRecord) -> TokenMetadata {
         created_at: record.created_at,
         revoked_at: record.revoked_at,
     }
-}
-
-fn channel_from_record(record: ChannelRecord) -> ChannelResponse {
-    channel_response(record)
 }
 
 fn frame_channel_id(frame: &WebSocketFrame) -> Option<&str> {
@@ -542,7 +604,9 @@ async fn websocket_session(
     token: TokenRecord,
     after_sequence: i64,
 ) {
-    let channel = channel_from_record(channel);
+    let Ok(channel) = channel_response(&state.database_path, channel) else {
+        return;
+    };
     let self_token = token_metadata(token);
     let mut receiver = state.events.subscribe();
 
@@ -630,21 +694,33 @@ async fn handle_client_ws_frame(
 ) -> anyhow::Result<()> {
     let frame: WebSocketClientFrame = serde_json::from_str(text)?;
     let event = match frame {
-        WebSocketClientFrame::Message(payload) => append_message_event(
+        WebSocketClientFrame::Message(payload) => match append_message_event(
             &state.database_path,
             channel_id,
             self_token.clone(),
             &payload.body,
             payload.mentions,
             payload.reply_to_message_id,
-        )?,
-        WebSocketClientFrame::Status(payload) => append_status_event(
+        ) {
+            Ok(event) => event,
+            Err(err) => {
+                send_ws_frame(socket, &WebSocketFrame::Error(write_protocol_error(err))).await?;
+                return Ok(());
+            }
+        },
+        WebSocketClientFrame::Status(payload) => match append_status_event(
             &state.database_path,
             channel_id,
             self_token.clone(),
             payload.state,
             payload.scope,
-        )?,
+        ) {
+            Ok(event) => event,
+            Err(err) => {
+                send_ws_frame(socket, &WebSocketFrame::Error(write_protocol_error(err))).await?;
+                return Ok(());
+            }
+        },
     };
     let frame = frame_from_event(event);
     let sequence = frame_sequence(&frame).unwrap_or(0);
@@ -761,7 +837,18 @@ const ADMIN_DASHBOARD_HTML: &str = r##"<!doctype html>
       const channels = response.ok ? await response.json() : [];
       document.querySelector("#channel-list").replaceChildren(...channels.map((channel) => {
         const item = document.createElement("li");
-        item.textContent = `${channel.name} (${channel.mode})`;
+        const state = channel.archived_at === null ? "active" : "archived";
+        item.textContent = `${channel.name} (${channel.mode}, ${state}, guard ${channel.loop_guard.consecutive_agent_messages}/${channel.loop_guard.threshold}) `;
+        if (channel.archived_at === null) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.textContent = "Archive";
+          button.addEventListener("click", async () => {
+            await fetch(`/admin/api/channels/${channel.id}/archive`, { method: "POST" });
+            await refreshChannels();
+          });
+          item.append(button);
+        }
         return item;
       }));
     }

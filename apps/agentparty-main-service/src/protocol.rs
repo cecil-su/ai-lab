@@ -52,6 +52,9 @@ pub struct ChannelResponse {
     pub mode: ChannelMode,
     #[ts(type = "number")]
     pub created_at: i64,
+    #[ts(type = "number | null")]
+    pub archived_at: Option<i64>,
+    pub loop_guard: ChannelLoopGuard,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
@@ -59,6 +62,15 @@ pub struct ChannelResponse {
 pub enum ChannelMode {
     Normal,
     Party,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct ChannelLoopGuard {
+    #[ts(type = "number")]
+    pub consecutive_agent_messages: i64,
+    #[ts(type = "number")]
+    pub threshold: i64,
+    pub blocked: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
@@ -115,6 +127,7 @@ pub struct ChannelHistoryResponse {
     pub events: Vec<ChannelEvent>,
     #[ts(type = "number")]
     pub last_sequence: i64,
+    pub loop_guard: ChannelLoopGuard,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
@@ -244,6 +257,8 @@ pub fn generated_typescript_contract() -> String {
         &format!("export {}", ChannelResponse::decl()),
         "",
         &format!("export {}", ChannelMode::decl()),
+        "",
+        &format!("export {}", ChannelLoopGuard::decl()),
         "",
         &format!("export {}", MintTokenRequest::decl()),
         "",
