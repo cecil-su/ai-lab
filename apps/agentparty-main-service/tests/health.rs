@@ -13,6 +13,7 @@ async fn health_endpoint_returns_success_response_and_creates_database() {
         host: IpAddr::V4(Ipv4Addr::LOCALHOST),
         port: 0,
         database_path: database_path.clone(),
+        admin_secret: "test-admin-secret".to_string(),
     })
     .expect("router");
 

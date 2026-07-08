@@ -28,6 +28,75 @@ pub struct ProtocolError {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct AdminLoginRequest {
+    pub admin_secret: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct AdminLoginResponse {
+    pub ok: bool,
+    #[ts(type = "number")]
+    pub expires_in_seconds: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct CreateChannelRequest {
+    pub name: String,
+    pub mode: ChannelMode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct ChannelResponse {
+    pub id: String,
+    pub name: String,
+    pub mode: ChannelMode,
+    #[ts(type = "number")]
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelMode {
+    Normal,
+    Party,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct MintTokenRequest {
+    pub kind: TokenKind,
+    pub owner_label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct MintTokenResponse {
+    pub token: String,
+    pub metadata: TokenMetadata,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct TokenMetadata {
+    pub id: String,
+    pub kind: TokenKind,
+    pub owner_label: String,
+    #[ts(type = "number")]
+    pub created_at: i64,
+    #[ts(type = "number | null")]
+    pub revoked_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum TokenKind {
+    Human,
+    Agent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct AuthenticatedTokenResponse {
+    pub token: TokenMetadata,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(tag = "type", content = "payload")]
 pub enum WebSocketFrame {
     Welcome(WelcomeFrame),
@@ -65,6 +134,26 @@ pub fn generated_typescript_contract() -> String {
         &format!("export {}", ErrorResponse::decl()),
         "",
         &format!("export {}", ProtocolError::decl()),
+        "",
+        &format!("export {}", AdminLoginRequest::decl()),
+        "",
+        &format!("export {}", AdminLoginResponse::decl()),
+        "",
+        &format!("export {}", CreateChannelRequest::decl()),
+        "",
+        &format!("export {}", ChannelResponse::decl()),
+        "",
+        &format!("export {}", ChannelMode::decl()),
+        "",
+        &format!("export {}", MintTokenRequest::decl()),
+        "",
+        &format!("export {}", MintTokenResponse::decl()),
+        "",
+        &format!("export {}", TokenMetadata::decl()),
+        "",
+        &format!("export {}", TokenKind::decl()),
+        "",
+        &format!("export {}", AuthenticatedTokenResponse::decl()),
         "",
         &format!("export {}", WebSocketFrame::decl()),
         "",
