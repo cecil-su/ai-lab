@@ -1,28 +1,60 @@
-import type { ChannelEvent, ChannelMessage, PostMessageRequest, ServerProfile } from "./types";
+import type { ChannelEvent, ChannelMessage, PostMessageRequest, PresenceUpdate, ServerProfile } from "./types";
 import type { ChannelSubscription, ProtocolClient } from "./protocolClient";
 import type { ProfileStore } from "./profileStore";
 
 export type ConnectionState = "disconnected" | "connecting" | "connected";
+
+export type ChannelWorkbenchSnapshot = {
+  profile: ServerProfile;
+  connectionState: ConnectionState;
+  messages: ChannelMessage[];
+  selectedReplyTo: ChannelMessage | null;
+  composerBody: string;
+  composerMentions: string;
+  presence: PresenceUpdate[];
+  lastSequence: number;
+  error: string | null;
+  unreadCount: number;
+};
 
 export type WorkbenchSnapshot = {
   connectionState: ConnectionState;
   profile: ServerProfile | null;
   messages: ChannelMessage[];
   selectedReplyTo: ChannelMessage | null;
+  composerBody: string;
+  composerMentions: string;
+  presence: PresenceUpdate[];
   lastSequence: number;
   error: string | null;
+  activeProfileId: string | null;
+  channels: ChannelWorkbenchSnapshot[];
+};
+
+type ChannelState = ChannelWorkbenchSnapshot & {
+  token: string | null;
+  subscription: ChannelSubscription | null;
+};
+
+const EMPTY_ACTIVE_SNAPSHOT = {
+  connectionState: "disconnected" as const,
+  profile: null,
+  messages: [],
+  selectedReplyTo: null,
+  composerBody: "",
+  composerMentions: "",
+  presence: [],
+  lastSequence: 0,
+  error: null,
 };
 
 export class WorkbenchModel {
-  private token: string | null = null;
-  private subscription: ChannelSubscription | null = null;
+  private activeProfileId: string | null = null;
+  private channels = new Map<string, ChannelState>();
   private snapshot: WorkbenchSnapshot = {
-    connectionState: "disconnected",
-    profile: null,
-    messages: [],
-    selectedReplyTo: null,
-    lastSequence: 0,
-    error: null,
+    ...EMPTY_ACTIVE_SNAPSHOT,
+    activeProfileId: null,
+    channels: [],
   };
 
   constructor(
@@ -32,97 +64,229 @@ export class WorkbenchModel {
   ) {}
 
   getSnapshot(): WorkbenchSnapshot {
-    return { ...this.snapshot, messages: [...this.snapshot.messages] };
+    return {
+      ...this.snapshot,
+      messages: [...this.snapshot.messages],
+      channels: this.snapshot.channels.map(copyChannelSnapshot),
+    };
   }
 
   async connect(profile: ServerProfile): Promise<void> {
-    this.disconnect(false);
-    this.set({ connectionState: "connecting", profile, error: null });
+    const existing = this.channels.get(profile.id);
+    if (existing?.connectionState === "connected") {
+      this.switchChannel(profile.id);
+      return;
+    }
+
+    this.activeProfileId = profile.id;
+    this.setChannel(profile.id, makeChannelState(profile, existing, { connectionState: "connecting", error: null, unreadCount: 0 }));
     try {
-      this.token = await this.profiles.getToken(profile.id);
-      const history = await this.protocol.loadHistory(profile, this.token);
-      this.applyEvents(history.events);
-      this.set({ lastSequence: history.last_sequence, connectionState: "connected" });
-      this.subscription = this.protocol.watchChannel(
+      const token = await this.profiles.getToken(profile.id);
+      const history = await this.protocol.loadHistory(profile, token, existing?.lastSequence || undefined);
+      this.applyEvents(profile.id, history.events, false);
+      const state = this.requireChannel(profile.id);
+      state.token = token;
+      state.subscription = this.protocol.watchChannel(
         profile,
-        this.token,
-        (event) => this.receive(event),
-        () => this.disconnect(true),
+        token,
+        (event) => this.receive(profile.id, event),
+        () => this.disconnect(true, profile.id),
       );
+      this.setChannel(profile.id, { ...state, lastSequence: Math.max(state.lastSequence, history.last_sequence), connectionState: "connected", error: null, unreadCount: 0 });
     } catch (error) {
-      this.set({ connectionState: "disconnected", error: errorMessage(error) });
+      const state = this.requireChannel(profile.id);
+      this.setChannel(profile.id, { ...state, connectionState: "disconnected", error: errorMessage(error) });
     }
   }
 
-  disconnect(keepHistory = true): void {
-    this.subscription?.close();
-    this.subscription = null;
-    this.token = null;
-    this.set({
+  switchChannel(profileId: string): void {
+    const state = this.channels.get(profileId);
+    if (!state) return;
+    this.activeProfileId = profileId;
+    this.setChannel(profileId, { ...state, unreadCount: 0 });
+  }
+
+  disconnect(keepHistory = true, profileId = this.activeProfileId): void {
+    if (!profileId) return;
+    const state = this.channels.get(profileId);
+    if (!state) return;
+    state.subscription?.close();
+    this.setChannel(profileId, {
+      ...state,
+      token: null,
+      subscription: null,
       connectionState: "disconnected",
-      messages: keepHistory ? this.snapshot.messages : [],
-      selectedReplyTo: keepHistory ? this.snapshot.selectedReplyTo : null,
+      messages: keepHistory ? state.messages : [],
+      selectedReplyTo: keepHistory ? state.selectedReplyTo : null,
     });
   }
 
   canSend(): boolean {
-    return this.snapshot.connectionState === "connected" && !!this.snapshot.profile && !!this.token;
+    const state = this.activeChannel();
+    return state?.connectionState === "connected" && !!state.token;
+  }
+
+  updateComposerDraft(patch: Partial<Pick<ChannelWorkbenchSnapshot, "composerBody" | "composerMentions">>): void {
+    const state = this.activeChannel();
+    if (!state) return;
+    this.setChannel(state.profile.id, { ...state, ...patch });
   }
 
   selectReplyTo(messageId: string | null): void {
-    this.set({
-      selectedReplyTo: this.snapshot.messages.find((message) => message.id === messageId) ?? null,
+    const state = this.activeChannel();
+    if (!state) return;
+    this.setChannel(state.profile.id, {
+      ...state,
+      selectedReplyTo: state.messages.find((message) => message.id === messageId) ?? null,
     });
   }
 
   async send(body: string, mentions: string[] = []): Promise<ChannelMessage> {
-    if (!this.canSend() || !this.snapshot.profile || !this.token) {
+    const state = this.activeChannel();
+    if (!this.canSend() || !state?.token) {
       throw new Error("Cannot send while disconnected");
     }
     const request: PostMessageRequest = {
       body,
       mentions,
-      reply_to_message_id: this.snapshot.selectedReplyTo?.id ?? null,
+      reply_to_message_id: state.selectedReplyTo?.id ?? null,
     };
-    const message = await this.protocol.postMessage(this.snapshot.profile, this.token, request);
-    this.upsertMessage(message);
-    this.set({ selectedReplyTo: null });
+    const message = await this.protocol.postMessage(state.profile, state.token, request);
+    this.upsertMessage(state.profile.id, message);
+    this.setChannel(state.profile.id, {
+      ...this.requireChannel(state.profile.id),
+      selectedReplyTo: null,
+      composerBody: "",
+    });
     return message;
   }
 
-  async catchUp(): Promise<void> {
-    if (!this.snapshot.profile) return;
-    const token = await this.profiles.getToken(this.snapshot.profile.id);
-    const history = await this.protocol.loadHistory(this.snapshot.profile, token, this.snapshot.lastSequence);
-    this.applyEvents(history.events);
-    this.set({ lastSequence: Math.max(this.snapshot.lastSequence, history.last_sequence) });
+  async catchUp(profileId = this.activeProfileId): Promise<void> {
+    if (!profileId) return;
+    const state = this.channels.get(profileId);
+    if (!state) return;
+    const token = state.token ?? (await this.profiles.getToken(profileId));
+    const history = await this.protocol.loadHistory(state.profile, token, state.lastSequence);
+    this.applyEvents(profileId, history.events, false);
+    const next = this.requireChannel(profileId);
+    this.setChannel(profileId, { ...next, lastSequence: Math.max(next.lastSequence, history.last_sequence) });
   }
 
-  private receive(event: ChannelEvent): void {
-    this.applyEvents([event]);
+  private receive(profileId: string, event: ChannelEvent): void {
+    this.applyEvents(profileId, [event], true);
   }
 
-  private applyEvents(events: ChannelEvent[]): void {
+  private applyEvents(profileId: string, events: ChannelEvent[], countUnread: boolean): void {
     for (const event of events) {
       if (event.type === "Message") {
-        this.upsertMessage(event.payload);
+        this.upsertMessage(profileId, event.payload, countUnread);
+      } else if (event.type === "Presence") {
+        this.upsertPresence(profileId, event.payload);
       } else if ("sequence" in event.payload) {
-        this.set({ lastSequence: Math.max(this.snapshot.lastSequence, event.payload.sequence) });
+        const state = this.requireChannel(profileId);
+        this.setChannel(profileId, { ...state, lastSequence: Math.max(state.lastSequence, event.payload.sequence) });
       }
     }
   }
 
-  private upsertMessage(message: ChannelMessage): void {
-    const messages = this.snapshot.messages.filter((item) => item.id !== message.id);
+  private upsertMessage(profileId: string, message: ChannelMessage, countUnread = false): void {
+    const state = this.requireChannel(profileId);
+    const wasKnown = state.messages.some((item) => item.id === message.id);
+    const messages = state.messages.filter((item) => item.id !== message.id);
     messages.push(message);
     messages.sort((a, b) => a.sequence - b.sequence);
-    this.set({ messages, lastSequence: Math.max(this.snapshot.lastSequence, message.sequence) });
+    const isUnread = countUnread && profileId !== this.activeProfileId && !wasKnown;
+    this.setChannel(profileId, {
+      ...state,
+      messages,
+      lastSequence: Math.max(state.lastSequence, message.sequence),
+      unreadCount: state.unreadCount + (isUnread ? 1 : 0),
+    });
   }
 
-  private set(patch: Partial<WorkbenchSnapshot>): void {
-    this.snapshot = { ...this.snapshot, ...patch };
+  private activeChannel(): ChannelState | null {
+    return this.activeProfileId ? this.channels.get(this.activeProfileId) ?? null : null;
+  }
+
+  private upsertPresence(profileId: string, presence: PresenceUpdate): void {
+    const state = this.requireChannel(profileId);
+    const nextPresence = state.presence.filter((item) => item.participant.id !== presence.participant.id);
+    nextPresence.push(presence);
+    nextPresence.sort((a, b) => a.participant.owner_label.localeCompare(b.participant.owner_label));
+    this.setChannel(profileId, { ...state, presence: nextPresence });
+  }
+
+  private requireChannel(profileId: string): ChannelState {
+    const state = this.channels.get(profileId);
+    if (!state) throw new Error("Workbench channel is not loaded");
+    return state;
+  }
+
+  private setChannel(profileId: string, state: ChannelState): void {
+    this.channels.set(profileId, state);
+    this.syncSnapshot();
+  }
+
+  private syncSnapshot(): void {
+    const active = this.activeChannel();
+    this.snapshot = {
+      ...(active ? channelToActiveSnapshot(active) : EMPTY_ACTIVE_SNAPSHOT),
+      activeProfileId: this.activeProfileId,
+      channels: [...this.channels.values()].map(copyChannelSnapshot),
+    };
     this.notify(this.getSnapshot());
   }
+}
+
+function makeChannelState(
+  profile: ServerProfile,
+  previous: ChannelState | undefined,
+  patch: Partial<ChannelState>,
+): ChannelState {
+  return {
+    profile,
+    connectionState: previous?.connectionState ?? "disconnected",
+    messages: previous?.messages ?? [],
+    selectedReplyTo: previous?.selectedReplyTo ?? null,
+    composerBody: previous?.composerBody ?? "",
+    composerMentions: previous?.composerMentions ?? "",
+    presence: previous?.presence ?? [],
+    lastSequence: previous?.lastSequence ?? 0,
+    error: previous?.error ?? null,
+    unreadCount: previous?.unreadCount ?? 0,
+    token: previous?.token ?? null,
+    subscription: previous?.subscription ?? null,
+    ...patch,
+  };
+}
+
+function channelToActiveSnapshot(channel: ChannelWorkbenchSnapshot) {
+  return {
+    connectionState: channel.connectionState,
+    profile: channel.profile,
+    messages: [...channel.messages],
+    selectedReplyTo: channel.selectedReplyTo,
+    composerBody: channel.composerBody,
+    composerMentions: channel.composerMentions,
+    presence: [...channel.presence],
+    lastSequence: channel.lastSequence,
+    error: channel.error,
+  };
+}
+
+function copyChannelSnapshot(channel: ChannelWorkbenchSnapshot): ChannelWorkbenchSnapshot {
+  return {
+    profile: channel.profile,
+    connectionState: channel.connectionState,
+    messages: [...channel.messages],
+    selectedReplyTo: channel.selectedReplyTo,
+    composerBody: channel.composerBody,
+    composerMentions: channel.composerMentions,
+    presence: [...channel.presence],
+    lastSequence: channel.lastSequence,
+    error: channel.error,
+    unreadCount: channel.unreadCount,
+  };
 }
 
 function errorMessage(error: unknown): string {

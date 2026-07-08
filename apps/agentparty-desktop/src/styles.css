@@ -130,8 +130,31 @@ button:disabled {
   text-align: left;
 }
 
+.profile-button.active {
+  border-color: #1f6feb;
+  background: #edf4ff;
+}
+
+.profile-button span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .profile-button small {
   color: #667085;
+}
+
+.unread-badge {
+  min-width: 20px;
+  border-radius: 999px;
+  background: #d92d20;
+  color: #fff;
+  padding: 2px 6px;
+  font-size: 12px;
+  line-height: 16px;
+  text-align: center;
 }
 
 .workbench {
@@ -155,12 +178,18 @@ button:disabled {
 
 .connection,
 .security,
+.presence-count,
 .message-meta,
 .reply-context,
 .send-row {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.presence-count {
+  color: #667085;
+  font-size: 12px;
 }
 
 .security {

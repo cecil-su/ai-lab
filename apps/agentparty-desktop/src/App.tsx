@@ -63,8 +63,13 @@ export function App() {
     profile: null,
     messages: [],
     selectedReplyTo: null,
+    composerBody: "",
+    composerMentions: "",
+    presence: [],
     lastSequence: 0,
     error: null,
+    activeProfileId: null,
+    channels: [],
   });
   const [relaySnapshot, setRelaySnapshot] = useState<LocalRelaySnapshot>({
     state: "stopped",
@@ -128,6 +133,10 @@ export function App() {
     await model.catchUp();
   }
 
+  async function sendComposerDraft(body: string, mentions: string[]) {
+    await model.send(body, mentions);
+  }
+
   return (
     <main className="shell">
       <aside className="sidebar">
@@ -146,17 +155,28 @@ export function App() {
           disabled={!snapshot.profile}
         />
         <div className="profile-list">
-          {profiles.map((profile) => (
-            <button key={profile.id} className="profile-button" onClick={() => void model.connect(profile)}>
-              <span>{profile.name}</span>
-              <small>{profile.channelId}</small>
-            </button>
-          ))}
+          {profiles.map((profile) => {
+            const channel = snapshot.channels.find((item) => item.profile.id === profile.id);
+            return (
+              <div key={profile.id} className={profile.id === snapshot.activeProfileId ? "profile-button active" : "profile-button"} role="button" tabIndex={0} onClick={() => void model.connect(profile)} onKeyDown={(event) => event.key === "Enter" ? void model.connect(profile) : undefined}>
+                <span>
+                  {profile.name}
+                  {channel?.unreadCount ? <strong className="unread-badge">{channel.unreadCount}</strong> : null}
+                </span>
+                <small>
+                  {profile.channelId} · {channel?.connectionState ?? "not loaded"}
+                </small>
+                <button className="icon-button mini" disabled={!channel} onClick={(event) => { event.stopPropagation(); void model.catchUp(profile.id); }} title="Catch up channel">
+                  <Plug size={14} />
+                </button>
+              </div>
+            );
+          })}
         </div>
       </aside>
       <section className="workbench">
         <header className="toolbar">
-          <ConnectionBadge profile={snapshot.profile} state={snapshot.connectionState} />
+          <ConnectionBadge profile={snapshot.profile} state={snapshot.connectionState} presenceCount={snapshot.presence.filter((item) => item.state === "online").length} />
           <button className="icon-button" disabled={!snapshot.profile} onClick={() => void model.catchUp()} title="Catch up">
             <Plug size={18} />
           </button>
@@ -174,8 +194,12 @@ export function App() {
         <Composer
           disabled={!model.canSend()}
           selectedReplyTo={snapshot.selectedReplyTo}
+          body={snapshot.composerBody}
+          mentions={snapshot.composerMentions}
+          onBodyChange={(body) => model.updateComposerDraft({ composerBody: body })}
+          onMentionsChange={(mentions) => model.updateComposerDraft({ composerMentions: mentions })}
           onClearReply={() => model.selectReplyTo(null)}
-          onSend={(body, mentions) => void model.send(body, mentions)}
+          onSend={(body, mentions) => void sendComposerDraft(body, mentions)}
         />
       </section>
     </main>
@@ -347,12 +371,13 @@ function AgentConfigPanel({
   );
 }
 
-function ConnectionBadge({ profile, state }: { profile: ServerProfile | null; state: string }) {
+function ConnectionBadge({ profile, state, presenceCount }: { profile: ServerProfile | null; state: string; presenceCount: number }) {
   const security = profile ? classifySafely(profile.serverUrl) : null;
   return (
     <div className="connection">
       {state === "connected" ? <ShieldCheck size={18} /> : <WifiOff size={18} />}
       <span>{profile?.name ?? "No profile"}</span>
+      {profile ? <span className="presence-count">{presenceCount} online</span> : null}
       {security ? <SecurityLabel security={security} /> : null}
     </div>
   );
@@ -393,10 +418,25 @@ function MessageList({ messages, selected, onReply }: { messages: ChannelMessage
   );
 }
 
-function Composer({ disabled, selectedReplyTo, onClearReply, onSend }: { disabled: boolean; selectedReplyTo: ChannelMessage | null; onClearReply: () => void; onSend: (body: string, mentions: string[]) => void }) {
-  const [body, setBody] = useState("");
-  const [mentions, setMentions] = useState("");
-
+function Composer({
+  disabled,
+  selectedReplyTo,
+  body,
+  mentions,
+  onBodyChange,
+  onMentionsChange,
+  onClearReply,
+  onSend,
+}: {
+  disabled: boolean;
+  selectedReplyTo: ChannelMessage | null;
+  body: string;
+  mentions: string;
+  onBodyChange: (body: string) => void;
+  onMentionsChange: (mentions: string) => void;
+  onClearReply: () => void;
+  onSend: (body: string, mentions: string[]) => void;
+}) {
   function submit(event: FormEvent) {
     event.preventDefault();
     if (!body.trim()) return;
@@ -407,7 +447,6 @@ function Composer({ disabled, selectedReplyTo, onClearReply, onSend }: { disable
         .map((item) => item.trim())
         .filter(Boolean),
     );
-    setBody("");
   }
 
   return (
@@ -418,9 +457,9 @@ function Composer({ disabled, selectedReplyTo, onClearReply, onSend }: { disable
           <button type="button" onClick={onClearReply}>Clear</button>
         </div>
       ) : null}
-      <input value={mentions} onChange={(event) => setMentions(event.target.value)} placeholder="Mentions, comma separated" disabled={disabled} />
+      <input value={mentions} onChange={(event) => onMentionsChange(event.target.value)} placeholder="Mentions, comma separated" disabled={disabled} />
       <div className="send-row">
-        <textarea value={body} onChange={(event) => setBody(event.target.value)} placeholder={disabled ? "Disconnected" : "Message"} disabled={disabled} />
+        <textarea value={body} onChange={(event) => onBodyChange(event.target.value)} placeholder={disabled ? "Disconnected" : "Message"} disabled={disabled} />
         <button className="send-button" disabled={disabled || !body.trim()} type="submit" title="Send">
           <Send size={18} />
         </button>
