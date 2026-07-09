@@ -15,9 +15,10 @@ use crate::protocol::{
 use crate::ServiceConfig;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path as AxumPath, Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::middleware;
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, options, post};
 use axum::{Json, Router};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -50,28 +51,44 @@ pub fn build_router(config: ServiceConfig) -> anyhow::Result<Router> {
     Ok(Router::new()
         .route("/health", get(health))
         .route("/admin", get(admin_page))
-        .route("/admin/login", post(admin_login))
+        .route("/admin/login", post(admin_login).options(cors_preflight))
         .route(
             "/admin/api/channels",
-            get(list_channels).post(create_channel),
+            get(list_channels)
+                .post(create_channel)
+                .options(cors_preflight),
         )
         .route(
             "/admin/api/channels/{channel_id}/archive",
-            post(archive_channel),
+            post(archive_channel).options(cors_preflight),
         )
-        .route("/admin/api/tokens", get(list_tokens).post(mint_token))
-        .route("/admin/api/tokens/{token_id}/revoke", post(revoke_token))
-        .route("/api/auth/me", get(authenticated_token))
+        .route(
+            "/admin/api/tokens",
+            get(list_tokens).post(mint_token).options(cors_preflight),
+        )
+        .route(
+            "/admin/api/tokens/{token_id}/revoke",
+            post(revoke_token).options(cors_preflight),
+        )
+        .route(
+            "/api/auth/me",
+            get(authenticated_token).options(cors_preflight),
+        )
         .route(
             "/api/channels/{channel_id}/messages",
-            post(post_channel_message),
+            post(post_channel_message).options(cors_preflight),
         )
         .route(
             "/api/channels/{channel_id}/status",
-            post(post_channel_status),
+            post(post_channel_status).options(cors_preflight),
         )
-        .route("/api/channels/{channel_id}/events", get(channel_history))
+        .route(
+            "/api/channels/{channel_id}/events",
+            get(channel_history).options(cors_preflight),
+        )
         .route("/api/channels/{channel_id}/ws", get(channel_websocket))
+        .route("/{*path}", options(cors_preflight))
+        .layer(middleware::map_response(add_cors_headers))
         .with_state(state))
 }
 
@@ -94,6 +111,27 @@ async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
     let mut response = health_response();
     response.database.connected = connected;
     Json(response)
+}
+
+async fn cors_preflight() -> Response {
+    StatusCode::NO_CONTENT.into_response()
+}
+
+async fn add_cors_headers(mut response: Response) -> Response {
+    let headers = response.headers_mut();
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        HeaderValue::from_static("*"),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_HEADERS,
+        HeaderValue::from_static("authorization,content-type"),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_METHODS,
+        HeaderValue::from_static("GET,POST,OPTIONS"),
+    );
+    response
 }
 
 async fn admin_page(State(state): State<AppState>, headers: HeaderMap) -> Html<&'static str> {

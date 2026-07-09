@@ -1,4 +1,5 @@
 import type { LocalAgentConfig, LocalAgentConfigInput } from "./types";
+import { makeLocalId } from "./localIds";
 
 type TauriInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -9,7 +10,7 @@ export interface AgentConfigStore {
 
 export function toPersistedAgentConfig(input: LocalAgentConfigInput, now = Date.now()): LocalAgentConfig {
   return {
-    id: input.id?.trim() || crypto.randomUUID(),
+    id: input.id?.trim() || makeLocalId("agent", now),
     name: input.name.trim(),
     channelId: input.channelId.trim(),
     runnerKind: input.runnerKind,

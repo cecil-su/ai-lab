@@ -1,4 +1,5 @@
 import type { ServerProfile, ServerProfileInput } from "./types";
+import { makeLocalId } from "./localIds";
 
 export type ConnectionSecurity = "https" | "trusted-intranet-http";
 
@@ -33,7 +34,7 @@ export function normalizeServerUrl(rawUrl: string): string {
 }
 
 export function toPersistedProfile(input: ServerProfileInput, now = Date.now()): ServerProfile {
-  const id = input.id?.trim() || crypto.randomUUID();
+  const id = input.id?.trim() || makeProfileId(now);
   return {
     id,
     name: input.name.trim(),
@@ -42,6 +43,10 @@ export function toPersistedProfile(input: ServerProfileInput, now = Date.now()):
     createdAt: now,
     updatedAt: now,
   };
+}
+
+function makeProfileId(now = Date.now()): string {
+  return makeLocalId("profile", now);
 }
 
 export class TauriProfileStore implements ProfileStore {

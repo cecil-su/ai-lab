@@ -22,7 +22,7 @@ export type ChannelSubscription = {
 
 export class HttpProtocolClient implements ProtocolClient {
   constructor(
-    private readonly fetchImpl: typeof fetch = fetch,
+    private readonly fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
     private readonly webSocketFactory: (url: string) => WebSocket = (url) => new WebSocket(url),
   ) {}
 

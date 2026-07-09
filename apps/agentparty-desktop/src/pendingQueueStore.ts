@@ -1,4 +1,5 @@
 import type { PendingDraft, PendingDraftInput } from "./types";
+import { makeLocalId } from "./localIds";
 
 type TauriInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -11,7 +12,7 @@ export interface PendingQueueStore {
 
 export function toPendingDraft(input: PendingDraftInput, now = Date.now()): PendingDraft {
   return {
-    id: crypto.randomUUID(),
+    id: makeLocalId("draft", now),
     ...input,
     createdAt: now,
     updatedAt: now,
