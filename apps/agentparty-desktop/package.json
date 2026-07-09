@@ -6,7 +6,10 @@
   "description": "AgentParty Tauri desktop workbench",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5175",
+    "dev:tauri": "tauri dev",
+    "dev:local": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev-local.ps1",
     "build": "tsc && vite build",
+    "build:tauri": "tauri build",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "cargo:check": "cargo check --manifest-path src-tauri/Cargo.toml"
@@ -19,6 +22,7 @@
     "vite": "^6.0.0"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.11.2",
     "@types/node": "^24.12.2",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

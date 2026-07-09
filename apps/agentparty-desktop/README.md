@@ -1,17 +1,25 @@
 # AgentParty Desktop
 
+For the localhost, intranet service connection, and packaging workflow, see `../../docs/agentparty-intranet-runbook.md`.
+
+Start the Tauri desktop client:
+
+```powershell
+pnpm --filter agentparty-desktop dev:tauri
+```
+
 ## Minimal runner loop acceptance check
 
 Start the Rust main service:
 
 ```powershell
-pnpm --filter agentparty-main-service dev
+pnpm --filter agentparty-main-service dev:local
 ```
 
 Start the Tauri desktop client:
 
 ```powershell
-pnpm --filter agentparty-desktop dev
+pnpm --filter agentparty-desktop dev:tauri
 ```
 
 1. In the main service admin page, create a channel plus one human token and one agent token.

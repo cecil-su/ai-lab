@@ -2,12 +2,14 @@
 
 Rust foundation for the AgentParty intranet main service.
 
+For the cohesive localhost, intranet, desktop connection, and packaging workflow, see `../../docs/agentparty-intranet-runbook.md`.
+
 ## Local Development
 
 From the repository root:
 
 ```powershell
-pnpm --filter agentparty-main-service dev
+pnpm --filter agentparty-main-service dev:local
 ```
 
 By default the service listens on `127.0.0.1:4180` and creates a SQLite database at `data/agentparty-main.sqlite3` inside this app directory.

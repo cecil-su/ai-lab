@@ -5,7 +5,10 @@
   "description": "AgentParty Rust intranet main service",
   "scripts": {
     "dev": "cargo run",
+    "dev:local": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev-local.ps1",
+    "dev:intranet": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev-intranet.ps1",
     "build": "cargo build",
+    "build:release": "cargo build --release",
     "test": "cargo test",
     "check": "cargo check"
   }
