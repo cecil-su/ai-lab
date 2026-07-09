@@ -770,18 +770,88 @@ const ADMIN_LOGIN_HTML: &str = r##"<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AgentParty Admin</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --ink: #17202a;
+      --muted: #657286;
+      --line: #d8dee8;
+      --accent: #116a5c;
+      --accent-strong: #0b4f45;
+      --danger: #b42318;
+      --focus: #7cc7bc;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+    main {
+      width: min(460px, calc(100vw - 32px));
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 28px;
+      box-shadow: 0 18px 45px rgba(23, 32, 42, 0.08);
+    }
+    h1 { margin: 0 0 8px; font-size: 28px; line-height: 1.15; }
+    p { margin: 0 0 22px; color: var(--muted); }
+    label { display: block; margin-bottom: 16px; font-weight: 650; }
+    input {
+      width: 100%;
+      margin-top: 7px;
+      padding: 11px 12px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      font: inherit;
+    }
+    input:focus {
+      outline: 3px solid var(--focus);
+      border-color: var(--accent);
+    }
+    button {
+      width: 100%;
+      border: 0;
+      border-radius: 6px;
+      padding: 11px 14px;
+      background: var(--accent);
+      color: white;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button:hover { background: var(--accent-strong); }
+    #login-error {
+      min-height: 22px;
+      margin-top: 14px;
+      color: var(--danger);
+      font-weight: 650;
+    }
+  </style>
 </head>
 <body>
   <main>
     <h1>AgentParty Admin</h1>
+    <p>Sign in with the admin secret configured for this main service. After login you can create channels and mint desktop tokens.</p>
     <form id="login-form">
       <label>Admin secret <input name="admin_secret" type="password" autocomplete="current-password" autofocus></label>
       <button type="submit">Sign in</button>
+      <div id="login-error" role="status" aria-live="polite"></div>
     </form>
   </main>
   <script>
     document.querySelector("#login-form").addEventListener("submit", async (event) => {
       event.preventDefault();
+      const error = document.querySelector("#login-error");
+      error.textContent = "";
       const admin_secret = new FormData(event.currentTarget).get("admin_secret");
       const response = await fetch("/admin/login", {
         method: "POST",
@@ -789,7 +859,7 @@ const ADMIN_LOGIN_HTML: &str = r##"<!doctype html>
         body: JSON.stringify({ admin_secret })
       });
       if (response.ok) location.reload();
-      else alert("Invalid admin secret");
+      else error.textContent = "Invalid admin secret.";
     });
   </script>
 </body>
@@ -801,74 +871,366 @@ const ADMIN_DASHBOARD_HTML: &str = r##"<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AgentParty Admin</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --ink: #17202a;
+      --muted: #657286;
+      --line: #d8dee8;
+      --line-strong: #bac4d2;
+      --accent: #116a5c;
+      --accent-strong: #0b4f45;
+      --danger: #b42318;
+      --warn-bg: #fff7e6;
+      --warn-line: #f2c46d;
+      --ok-bg: #eaf7f3;
+      --focus: #7cc7bc;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+    main {
+      width: min(1180px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 28px 0 40px;
+    }
+    header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 22px;
+    }
+    h1 { margin: 0 0 6px; font-size: 30px; line-height: 1.15; }
+    h2 { margin: 0 0 6px; font-size: 18px; }
+    h3 { margin: 0 0 10px; font-size: 14px; color: var(--muted); text-transform: uppercase; }
+    p { margin: 0; color: var(--muted); }
+    .status {
+      min-width: 210px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: minmax(300px, 0.95fr) minmax(360px, 1.2fr) minmax(300px, 0.95fr);
+      gap: 16px;
+      align-items: start;
+    }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px;
+      min-width: 0;
+    }
+    form { display: grid; gap: 12px; margin-top: 16px; }
+    label { display: grid; gap: 6px; font-weight: 650; }
+    input, select {
+      width: 100%;
+      padding: 10px 11px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: white;
+      color: var(--ink);
+      font: inherit;
+    }
+    input:focus, select:focus, button:focus {
+      outline: 3px solid var(--focus);
+      outline-offset: 1px;
+    }
+    button {
+      border: 1px solid transparent;
+      border-radius: 6px;
+      padding: 10px 12px;
+      background: var(--accent);
+      color: white;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    button:hover { background: var(--accent-strong); }
+    button.secondary {
+      background: white;
+      color: var(--ink);
+      border-color: var(--line-strong);
+    }
+    button.secondary:hover { background: #eef2f6; }
+    button.danger {
+      background: white;
+      color: var(--danger);
+      border-color: #f0b8b2;
+    }
+    button.danger:hover { background: #fff1ef; }
+    .list {
+      display: grid;
+      gap: 10px;
+      margin-top: 16px;
+    }
+    .item {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #fbfcfd;
+    }
+    .item-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .name { font-weight: 750; overflow-wrap: anywhere; }
+    .meta {
+      display: grid;
+      gap: 4px;
+      color: var(--muted);
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: white;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 750;
+      text-transform: uppercase;
+    }
+    .badge.active { background: var(--ok-bg); color: var(--accent-strong); border-color: #9bd3c8; }
+    .badge.revoked, .badge.archived { color: var(--danger); border-color: #f0b8b2; background: #fff1ef; }
+    .token-result {
+      display: none;
+      margin-top: 16px;
+      border: 1px solid var(--warn-line);
+      background: var(--warn-bg);
+      border-radius: 8px;
+      padding: 12px;
+    }
+    .token-result.visible { display: block; }
+    .token-value {
+      margin-top: 10px;
+      padding: 10px;
+      border: 1px solid var(--warn-line);
+      border-radius: 6px;
+      background: white;
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 13px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .empty {
+      margin-top: 16px;
+      padding: 16px;
+      border: 1px dashed var(--line-strong);
+      border-radius: 8px;
+      color: var(--muted);
+      background: #fbfcfd;
+    }
+    .copy-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: center;
+      margin-top: 10px;
+    }
+    @media (max-width: 980px) {
+      header { display: block; }
+      .status { margin-top: 14px; }
+      .grid { grid-template-columns: 1fr; }
+    }
+  </style>
 </head>
 <body>
   <main>
-    <h1>AgentParty Admin</h1>
-    <section>
-      <h2>Create channel</h2>
+    <header>
+      <div>
+        <h1>AgentParty Admin</h1>
+        <p>Create channels and issue tokens for AgentParty Workbench clients.</p>
+      </div>
+      <div class="status" id="service-status">Loading service state...</div>
+    </header>
+    <div class="grid">
+    <section aria-labelledby="create-channel-title">
+      <h2 id="create-channel-title">Create Channel</h2>
+      <p>Use a normal channel for directed tests, or party mode for multi-agent rooms.</p>
       <form id="channel-form">
-        <input name="name" placeholder="Channel name">
-        <select name="mode">
-          <option value="normal">Normal</option>
-          <option value="party">Party</option>
-        </select>
+        <label>Channel name <input name="name" placeholder="Example: Local AgentParty" required></label>
+        <label>Mode
+          <select name="mode">
+            <option value="normal">Normal</option>
+            <option value="party">Party</option>
+          </select>
+        </label>
         <button type="submit">Create</button>
       </form>
-      <ul id="channel-list"></ul>
     </section>
-    <section>
-      <h2>Mint token</h2>
+    <section aria-labelledby="channels-title">
+      <h2 id="channels-title">Channels</h2>
+      <p>Copy a channel ID into Workbench when creating a server profile.</p>
+      <div id="channel-list" class="list"></div>
+    </section>
+    <section aria-labelledby="mint-token-title">
+      <h2 id="mint-token-title">Mint Token</h2>
+      <p>Mint a human token for an operator or an agent token for a local runner.</p>
       <form id="token-form">
-        <input name="owner_label" placeholder="Owner label">
-        <select name="kind">
-          <option value="human">Human</option>
-          <option value="agent">Agent</option>
-        </select>
+        <label>Owner label <input name="owner_label" placeholder="Example: Alice Workbench" required></label>
+        <label>Token kind
+          <select name="kind">
+            <option value="human">Human</option>
+            <option value="agent">Agent</option>
+          </select>
+        </label>
         <button type="submit">Mint</button>
       </form>
-      <pre id="minted-token"></pre>
-      <ul id="token-list"></ul>
+      <div id="minted-token" class="token-result" aria-live="polite"></div>
     </section>
+    <section aria-labelledby="tokens-title">
+      <h2 id="tokens-title">Tokens</h2>
+      <p>Token secrets are shown only once when minted. The list only shows metadata.</p>
+      <div id="token-list" class="list"></div>
+    </section>
+    </div>
   </main>
   <script>
+    const status = document.querySelector("#service-status");
+
+    function setStatus(message) {
+      status.textContent = message;
+    }
+
+    function formatTime(value) {
+      if (value === null || value === undefined) return "never";
+      return new Date(value * 1000).toLocaleString();
+    }
+
+    function emptyState(text) {
+      const node = document.createElement("div");
+      node.className = "empty";
+      node.textContent = text;
+      return node;
+    }
+
+    function copyButton(value, label = "Copy") {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "secondary";
+      button.textContent = label;
+      button.addEventListener("click", async () => {
+        await navigator.clipboard.writeText(value);
+        button.textContent = "Copied";
+        window.setTimeout(() => { button.textContent = label; }, 1200);
+      });
+      return button;
+    }
+
+    async function requestJson(url, options = {}) {
+      const response = await fetch(url, options);
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `Request failed: ${response.status}`);
+      }
+      return response.json();
+    }
+
     async function refreshChannels() {
-      const response = await fetch("/admin/api/channels");
-      const channels = response.ok ? await response.json() : [];
-      document.querySelector("#channel-list").replaceChildren(...channels.map((channel) => {
-        const item = document.createElement("li");
+      const channels = await requestJson("/admin/api/channels");
+      const list = document.querySelector("#channel-list");
+      if (channels.length === 0) {
+        list.replaceChildren(emptyState("No channels yet."));
+        return;
+      }
+      list.replaceChildren(...channels.map((channel) => {
+        const item = document.createElement("article");
+        item.className = "item";
         const state = channel.archived_at === null ? "active" : "archived";
-        item.textContent = `${channel.name} (${channel.mode}, ${state}, guard ${channel.loop_guard.consecutive_agent_messages}/${channel.loop_guard.threshold}) `;
+        item.innerHTML = `
+          <div class="item-head">
+            <div class="name"></div>
+            <span class="badge ${state}">${state}</span>
+          </div>
+          <div class="meta">
+            <div><strong>ID:</strong> <span class="channel-id"></span></div>
+            <div><strong>Mode:</strong> ${channel.mode}</div>
+            <div><strong>Loop guard:</strong> ${channel.loop_guard.consecutive_agent_messages}/${channel.loop_guard.threshold}</div>
+            <div><strong>Created:</strong> ${formatTime(channel.created_at)}</div>
+          </div>
+          <div class="actions"></div>
+        `;
+        item.querySelector(".name").textContent = channel.name;
+        item.querySelector(".channel-id").textContent = channel.id;
+        const actions = item.querySelector(".actions");
+        actions.append(copyButton(channel.id, "Copy ID"));
         if (channel.archived_at === null) {
           const button = document.createElement("button");
           button.type = "button";
+          button.className = "danger";
           button.textContent = "Archive";
           button.addEventListener("click", async () => {
-            await fetch(`/admin/api/channels/${channel.id}/archive`, { method: "POST" });
+            await requestJson(`/admin/api/channels/${channel.id}/archive`, { method: "POST" });
             await refreshChannels();
+            setStatus(`Archived channel ${channel.name}.`);
           });
-          item.append(button);
+          actions.append(button);
         }
         return item;
       }));
     }
 
     async function refreshTokens() {
-      const response = await fetch("/admin/api/tokens");
-      const tokens = response.ok ? await response.json() : [];
-      document.querySelector("#token-list").replaceChildren(...tokens.map((token) => {
-        const item = document.createElement("li");
+      const tokens = await requestJson("/admin/api/tokens");
+      const list = document.querySelector("#token-list");
+      if (tokens.length === 0) {
+        list.replaceChildren(emptyState("No tokens yet."));
+        return;
+      }
+      list.replaceChildren(...tokens.map((token) => {
+        const item = document.createElement("article");
+        item.className = "item";
         const state = token.revoked_at === null ? "active" : "revoked";
-        item.textContent = `${token.owner_label} (${token.kind}, ${state}) `;
+        item.innerHTML = `
+          <div class="item-head">
+            <div class="name"></div>
+            <span class="badge ${state}">${state}</span>
+          </div>
+          <div class="meta">
+            <div><strong>ID:</strong> <span class="token-id"></span></div>
+            <div><strong>Kind:</strong> ${token.kind}</div>
+            <div><strong>Created:</strong> ${formatTime(token.created_at)}</div>
+            <div><strong>Revoked:</strong> ${formatTime(token.revoked_at)}</div>
+          </div>
+          <div class="actions"></div>
+        `;
+        item.querySelector(".name").textContent = token.owner_label;
+        item.querySelector(".token-id").textContent = token.id;
+        const actions = item.querySelector(".actions");
         if (token.revoked_at === null) {
           const button = document.createElement("button");
           button.type = "button";
+          button.className = "danger";
           button.textContent = "Revoke";
           button.addEventListener("click", async () => {
-            await fetch(`/admin/api/tokens/${token.id}/revoke`, { method: "POST" });
+            await requestJson(`/admin/api/tokens/${token.id}/revoke`, { method: "POST" });
             await refreshTokens();
+            setStatus(`Revoked token for ${token.owner_label}.`);
           });
-          item.append(button);
+          actions.append(button);
         }
         return item;
       }));
@@ -877,21 +1239,36 @@ const ADMIN_DASHBOARD_HTML: &str = r##"<!doctype html>
     document.querySelector("#channel-form").addEventListener("submit", async (event) => {
       event.preventDefault();
       const data = Object.fromEntries(new FormData(event.currentTarget));
-      await fetch("/admin/api/channels", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(data) });
+      const channel = await requestJson("/admin/api/channels", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(data) });
       event.currentTarget.reset();
       await refreshChannels();
+      setStatus(`Created channel ${channel.name}. Copy its ID into Workbench.`);
     });
     document.querySelector("#token-form").addEventListener("submit", async (event) => {
       event.preventDefault();
       const data = Object.fromEntries(new FormData(event.currentTarget));
-      const response = await fetch("/admin/api/tokens", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(data) });
-      const body = await response.json();
-      document.querySelector("#minted-token").textContent = response.ok ? body.token : "";
+      const body = await requestJson("/admin/api/tokens", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(data) });
+      const result = document.querySelector("#minted-token");
+      result.classList.add("visible");
+      result.replaceChildren();
+      const title = document.createElement("strong");
+      title.textContent = "Copy this token now. It will not be shown again.";
+      const value = document.createElement("div");
+      value.className = "token-value";
+      value.textContent = body.token;
+      const row = document.createElement("div");
+      row.className = "copy-row";
+      const hint = document.createElement("span");
+      hint.textContent = `${body.metadata.kind} token for ${body.metadata.owner_label}`;
+      row.append(hint, copyButton(body.token, "Copy token"));
+      result.append(title, value, row);
       event.currentTarget.reset();
       await refreshTokens();
+      setStatus(`Minted ${body.metadata.kind} token for ${body.metadata.owner_label}.`);
     });
-    refreshChannels();
-    refreshTokens();
+    Promise.all([refreshChannels(), refreshTokens()])
+      .then(() => setStatus("Ready. Create a channel, mint a token, then connect Workbench."))
+      .catch((error) => setStatus(error.message));
   </script>
 </body>
 </html>"##;
