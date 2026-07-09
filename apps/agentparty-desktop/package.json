@@ -8,6 +8,8 @@
     "dev": "vite --host 127.0.0.1 --port 5175",
     "dev:tauri": "tauri dev",
     "dev:local": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev-local.ps1",
+    "bootstrap:profile": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap-profile.ps1",
+    "bootstrap:local": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap-local.ps1",
     "build": "tsc && vite build",
     "build:tauri": "tauri build",
     "test": "vitest run",

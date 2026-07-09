@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     collections::HashMap,
+    env,
     fs,
     io::Write,
     path::{Path, PathBuf},
@@ -637,6 +638,11 @@ fn delete_pending_draft(id: String) -> Result<(), String> {
 }
 
 fn main() {
+    if let Err(error) = run_cli_if_requested() {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
+
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             list_server_profiles,
@@ -655,6 +661,59 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running AgentParty desktop workbench");
+}
+
+fn run_cli_if_requested() -> Result<(), String> {
+    let args = env::args().skip(1).collect::<Vec<_>>();
+    let Some(command) = args.first() else {
+        return Ok(());
+    };
+
+    if command != "bootstrap-profile" {
+        return Ok(());
+    }
+
+    let input = parse_bootstrap_profile_args(&args[1..])?;
+    let profile = save_server_profile(input)?;
+    println!(
+        "Bootstrapped AgentParty profile {} for {} channel {}",
+        profile.id, profile.server_url, profile.channel_id
+    );
+    std::process::exit(0);
+}
+
+fn parse_bootstrap_profile_args(args: &[String]) -> Result<ServerProfileInput, String> {
+    let mut id = None;
+    let mut name = None;
+    let mut server_url = None;
+    let mut channel_id = None;
+    let mut token = None;
+    let mut index = 0;
+
+    while index < args.len() {
+        let flag = args[index].as_str();
+        let value = args
+            .get(index + 1)
+            .ok_or_else(|| format!("{flag} requires a value"))?
+            .clone();
+        match flag {
+            "--id" => id = Some(value),
+            "--name" => name = Some(value),
+            "--server-url" => server_url = Some(value),
+            "--channel-id" => channel_id = Some(value),
+            "--token" => token = Some(value),
+            _ => return Err(format!("unknown bootstrap-profile argument: {flag}")),
+        }
+        index += 2;
+    }
+
+    Ok(ServerProfileInput {
+        id,
+        name: name.unwrap_or_else(|| "Local AgentParty".to_string()),
+        server_url: server_url.ok_or_else(|| "--server-url is required".to_string())?,
+        channel_id: channel_id.ok_or_else(|| "--channel-id is required".to_string())?,
+        token: token.ok_or_else(|| "--token is required".to_string())?,
+    })
 }
 
 fn normalize_server_url(raw_url: &str) -> Result<String, String> {
@@ -1311,5 +1370,35 @@ mod tests {
 
         std::env::remove_var("AGENTPARTY_DESKTOP_DATA_DIR");
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn bootstrap_profile_args_require_connection_fields() {
+        let input = parse_bootstrap_profile_args(&[
+            "--id".to_string(),
+            "profile-local".to_string(),
+            "--name".to_string(),
+            "Local".to_string(),
+            "--server-url".to_string(),
+            "http://127.0.0.1:4180".to_string(),
+            "--channel-id".to_string(),
+            "chan-1".to_string(),
+            "--token".to_string(),
+            "token-1".to_string(),
+        ])
+        .expect("bootstrap profile args should parse");
+
+        assert_eq!(input.id.as_deref(), Some("profile-local"));
+        assert_eq!(input.name, "Local");
+        assert_eq!(input.server_url, "http://127.0.0.1:4180");
+        assert_eq!(input.channel_id, "chan-1");
+        assert_eq!(input.token, "token-1");
+
+        let error = parse_bootstrap_profile_args(&[
+            "--server-url".to_string(),
+            "http://127.0.0.1:4180".to_string(),
+        ])
+        .expect_err("missing channel/token should fail");
+        assert!(error.contains("--channel-id is required"));
     }
 }

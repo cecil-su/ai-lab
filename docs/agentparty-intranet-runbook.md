@@ -90,6 +90,22 @@ Channel ID: <channel id from the management page>
 Token: <human or agent token secret>
 ```
 
+Or bootstrap the profile through the same Tauri backend that stores tokens:
+
+```powershell
+pnpm --filter agentparty-desktop bootstrap:profile -- `
+  -Name "Local AgentParty" `
+  -ServerUrl http://127.0.0.1:4180 `
+  -ChannelId <channel id from the management page> `
+  -Token <human or agent token secret>
+```
+
+For local development, create the channel, mint an agent token, and save the desktop profile in one command after the service is running:
+
+```powershell
+pnpm --filter agentparty-desktop bootstrap:local
+```
+
 For an intranet service, use the intranet host and port instead:
 
 ```text

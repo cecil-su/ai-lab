@@ -8,6 +8,21 @@ Start the Tauri desktop client:
 pnpm --filter agentparty-desktop dev:tauri
 ```
 
+Bootstrap a server profile through the Tauri backend:
+
+```powershell
+pnpm --filter agentparty-desktop bootstrap:profile -- `
+  -ServerUrl http://127.0.0.1:4180 `
+  -ChannelId chan_xxx `
+  -Token ap_xxx
+```
+
+Bootstrap a local profile from a running local service:
+
+```powershell
+pnpm --filter agentparty-desktop bootstrap:local
+```
+
 ## Minimal runner loop acceptance check
 
 Start the Rust main service:
