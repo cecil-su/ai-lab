@@ -31,6 +31,12 @@ Health check:
 Invoke-RestMethod http://127.0.0.1:4180/health
 ```
 
+End-to-end service smoke check:
+
+```powershell
+pnpm --filter agentparty-main-service smoke:e2e
+```
+
 Management page:
 
 ```text

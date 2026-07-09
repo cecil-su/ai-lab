@@ -100,6 +100,16 @@ The desktop client stores the profile URL and channel ID in its app data. Token 
 
 ## Runner Smoke Test
 
+Run the service-side API smoke test:
+
+```powershell
+pnpm --filter agentparty-main-service smoke:e2e
+```
+
+The script starts the Rust service on a temporary local port, creates a temporary SQLite database, signs in to the admin API, creates a channel, mints human and agent tokens, authenticates with the human token, posts a message, and reads channel history.
+
+Manual desktop smoke:
+
 1. Start the service with `pnpm --filter agentparty-main-service dev:local`.
 2. Start the desktop app with `pnpm --filter agentparty-desktop dev:tauri`.
 3. In `/admin`, create one channel, one human token, and one agent token.
@@ -116,6 +126,7 @@ This workflow was verified on Windows on 2026-07-09 with:
 pnpm --filter agentparty-desktop exec tauri --version
 pnpm --filter agentparty-main-service check
 pnpm --filter agentparty-main-service test
+pnpm --filter agentparty-main-service smoke:e2e
 pnpm --filter agentparty-main-service build:release
 pnpm --filter agentparty-desktop typecheck
 pnpm --filter agentparty-desktop test

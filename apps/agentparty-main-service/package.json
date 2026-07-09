@@ -9,6 +9,7 @@
     "dev:intranet": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev-intranet.ps1",
     "build": "cargo build",
     "build:release": "cargo build --release",
+    "smoke:e2e": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-e2e.ps1",
     "test": "cargo test",
     "check": "cargo check"
   }
