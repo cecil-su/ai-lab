@@ -31,6 +31,15 @@ export function isSkip(body: string): boolean {
   return SKIP_RE.test(body.trim());
 }
 
+// R4c 旋钮:单条引用发言的最大字数,超出截断(压制 token)
+export const QUOTE_MAX_CHARS = 2000;
+
+/** 引用他人发言时按上限截断,超出附省略标记 */
+export function clampQuote(body: string, max = QUOTE_MAX_CHARS): string {
+  const t = body.trim();
+  return t.length <= max ? t : t.slice(0, max) + "\n…(已截断)";
+}
+
 export interface PromptSelf {
   handle: string;
   perspective: string;
@@ -63,6 +72,7 @@ function protocol(round: number, maxRounds: number): string {
     `现在是第 ${round} / 最多 ${maxRounds} 轮讨论。请围绕议题发表本轮观点,要求简洁、有信息增量。`,
     "- 正文末尾必须另起一行输出你的立场,格式:【立场】<一句话立场>",
     "- 若本轮无新增信息,可只输出一行:【跳过】",
+    "- 控制篇幅:聚焦要点,单次发言尽量不超过 600 字。",
   ].join("\n");
 }
 
@@ -75,15 +85,43 @@ export function buildPrompt(inp: BuildPromptInput): string {
   }
 
   if (inp.recent.length > 0) {
-    const lines = inp.recent.map((r) => {
-      const tag = r.kind === "human" ? "(人类插话)" : r.kind === "skip" ? "(跳过)" : "";
-      return `### ${r.from}${tag}\n${r.body.trim()}`;
-    });
-    parts.push(`## 最近发言\n${lines.join("\n\n")}`);
+    parts.push(`## 最近发言\n${renderSpeeches(inp.recent)}`);
   } else {
     parts.push("## 最近发言\n(本轮为首轮,暂无历史发言)");
   }
 
+  parts.push(`## 你的身份\n你是「${inp.self.handle}」,视角:${inp.self.perspective}`);
+  parts.push(protocol(inp.round, inp.maxRounds));
+  return parts.join("\n\n");
+}
+
+function speechTag(kind: RecentSpeech["kind"]): string {
+  return kind === "human" ? "(人类插话)" : kind === "skip" ? "(跳过)" : kind === "verdict" ? "(裁决)" : "";
+}
+
+function renderSpeeches(speeches: RecentSpeech[]): string {
+  return speeches.map((r) => `### ${r.from}${speechTag(r.kind)}\n${clampQuote(r.body)}`).join("\n\n");
+}
+
+export interface DeltaPromptInput {
+  self: PromptSelf;
+  round: number;
+  maxRounds: number;
+  /** 该参与者上次发言之后的新增发言(不含 charter/历史;会话已持有) */
+  newSpeeches: RecentSpeech[];
+}
+
+/**
+ * 增量 prompt(R4b):仅发"上次发言后的新增内容 + 身份提醒 + 协议",不重发 charter/历史。
+ * 前提是该参与者经 --resume 已在自身会话里持有 charter 与更早简报。
+ */
+export function buildDeltaPrompt(inp: DeltaPromptInput): string {
+  const parts: string[] = [];
+  if (inp.newSpeeches.length > 0) {
+    parts.push(`## 最新进展(你上次发言后)\n${renderSpeeches(inp.newSpeeches)}`);
+  } else {
+    parts.push("## 最新进展\n(你上次发言后暂无他人新发言)");
+  }
   parts.push(`## 你的身份\n你是「${inp.self.handle}」,视角:${inp.self.perspective}`);
   parts.push(protocol(inp.round, inp.maxRounds));
   return parts.join("\n\n");
@@ -105,4 +143,25 @@ export function promptContext(
     }
   }
   return { stanceSummary, recent };
+}
+
+/** 某 handle 最近一次自身发言(message/skip)的 seq;从未发言返回 0 */
+export function lastOwnSeq(events: TranscriptEvent[], handle: string): number {
+  let seq = 0;
+  for (const e of events) {
+    if (e.from === handle && (e.kind === "message" || e.kind === "skip")) seq = Math.max(seq, e.seq);
+  }
+  return seq;
+}
+
+/** 增量上下文:lastOwnSeq 之后的新增发言(该参与者尚未见过的) */
+export function deltaContext(events: TranscriptEvent[], sinceSeq: number): RecentSpeech[] {
+  const out: RecentSpeech[] = [];
+  for (const e of events) {
+    if (e.seq <= sinceSeq || !e.from || e.body === undefined) continue;
+    if (e.kind === "message" || e.kind === "human" || e.kind === "verdict" || e.kind === "skip") {
+      out.push({ from: e.from, body: e.body, kind: e.kind });
+    }
+  }
+  return out;
 }

@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildDeltaPrompt,
   buildPrompt,
+  clampQuote,
+  deltaContext,
   extractStance,
   isSkip,
+  lastOwnSeq,
   stanceDigest,
   truncateBody,
 } from "../src/engine/prompt.js";
+import type { TranscriptEvent } from "../src/store/transcript.js";
 
 describe("stance extraction (pure)", () => {
   it("extracts the last 【立场】 line content", () => {
@@ -74,5 +79,60 @@ describe("buildPrompt assembly", () => {
     const out = buildPrompt({ ...base, round: 1, stanceSummary: [], recent: [] });
     expect(out).not.toContain("## 历史立场摘要");
     expect(out).toContain("(本轮为首轮,暂无历史发言)");
+  });
+});
+
+describe("increment prompt (R4b)", () => {
+  const ev = (seq: number, from: string, kind: TranscriptEvent["kind"], body?: string): TranscriptEvent => ({
+    seq,
+    ts: "",
+    round: 1,
+    from,
+    kind,
+    ...(body !== undefined ? { body } : {}),
+  });
+
+  it("lastOwnSeq 取该 handle 最近的 message/skip seq,从未发言为 0", () => {
+    const events = [
+      ev(1, "a", "message", "A1"),
+      ev(2, "b", "message", "B1"),
+      ev(3, "a", "skip"),
+      ev(4, "b", "message", "B2"),
+    ];
+    expect(lastOwnSeq(events, "a")).toBe(3);
+    expect(lastOwnSeq(events, "b")).toBe(4);
+    expect(lastOwnSeq(events, "c")).toBe(0);
+  });
+
+  it("deltaContext 只取 sinceSeq 之后、有正文的发言", () => {
+    const events = [
+      ev(1, "a", "message", "A1"),
+      ev(2, "b", "message", "B1"),
+      ev(3, "a", "message", "A2"),
+      ev(4, "c", "human", "插话"),
+      ev(5, "x", "round_end"), // 无 from/body → 排除
+    ];
+    const delta = deltaContext(events, 1);
+    expect(delta.map((d) => d.body)).toEqual(["B1", "A2", "插话"]);
+  });
+
+  it("buildDeltaPrompt 只含新增+身份+协议,不含 charter/历史", () => {
+    const out = buildDeltaPrompt({
+      self: { handle: "claude-1", perspective: "架构" },
+      round: 2,
+      maxRounds: 3,
+      newSpeeches: [{ from: "codex-1", body: "上一轮我反对\n【立场】反对", kind: "message" }],
+    });
+    expect(out).toContain("## 最新进展(你上次发言后)");
+    expect(out).toContain("### codex-1");
+    expect(out).toContain("你是「claude-1」");
+    expect(out).toContain("现在是第 2 / 最多 3 轮讨论");
+    expect(out).not.toContain("## 参考材料");
+    expect(out).not.toContain("## 历史立场摘要");
+  });
+
+  it("clampQuote 超长截断", () => {
+    expect(clampQuote("x".repeat(10), 5)).toBe("xxxxx\n…(已截断)");
+    expect(clampQuote("短", 5)).toBe("短");
   });
 });
