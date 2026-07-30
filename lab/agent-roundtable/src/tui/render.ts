@@ -79,7 +79,10 @@ export interface StatusView {
 }
 
 export function computeStatusBar(topic: Topic, lockAlive: boolean): StatusView {
-  const tokens = topic.participants.reduce((sum, p) => sum + p.tokens.input + p.tokens.output, 0);
+  const tokens = topic.participants.reduce(
+    (sum, p) => sum + p.tokens.input + p.tokens.cached + p.tokens.output,
+    0,
+  );
   const runner = lockAlive ? "运行中" : topic.status === "completed" ? "已完成" : "未运行";
   return {
     title: topic.title,

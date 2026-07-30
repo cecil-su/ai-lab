@@ -42,6 +42,18 @@ describe("topic store", () => {
     expect(loadTopic(path.join(root, INPUT.id))).toEqual(topic);
   });
 
+  it("loadTopic 向后兼容:旧 topic.json 缺 tokens.cached 时默认 0", () => {
+    const topic = createTopic(root, INPUT);
+    const dir = path.join(root, INPUT.id);
+    // 模拟旧数据:抹掉 cached 字段写回
+    const legacy = JSON.parse(fs.readFileSync(path.join(dir, "topic.json"), "utf8"));
+    for (const p of legacy.participants) delete p.tokens.cached;
+    fs.writeFileSync(path.join(dir, "topic.json"), JSON.stringify(legacy));
+    const loaded = loadTopic(dir);
+    expect(loaded.participants[0]!.tokens).toEqual({ input: 0, cached: 0, output: 0 });
+    void topic;
+  });
+
   it("createTopic rejects duplicate id", () => {
     createTopic(root, INPUT);
     expect(() => createTopic(root, INPUT)).toThrow(/already exists/);

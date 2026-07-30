@@ -29,6 +29,7 @@ export function createMockAdapter(scriptPath: string): ProviderAdapter {
         sessionRef: String(turn + 1),
         tokens: {
           input: Math.ceil(prompt.length / 4),
+          cached: 0,
           output: Math.ceil(text.length / 4),
         },
       };

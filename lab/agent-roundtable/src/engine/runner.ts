@@ -13,9 +13,12 @@ import {
 import { resolvePerspectiveText } from "./charter.js";
 import { selectMode } from "./modes.js";
 import {
+  buildDeltaPrompt,
   buildPrompt,
+  deltaContext,
   extractStance,
   isSkip,
+  lastOwnSeq,
   promptContext,
   stanceDigest,
 } from "./prompt.js";
@@ -194,7 +197,7 @@ function drainInbox(
 interface SpeechResult {
   event: TranscriptEvent;
   sessionRef: string;
-  tokens: { input: number; output: number };
+  tokens: { input: number; cached: number; output: number };
 }
 
 async function speakOnce(
@@ -207,24 +210,40 @@ async function speakOnce(
   timeoutMs: number,
 ): Promise<SpeechResult> {
   const adapter = adapters.get(participant.handle)!;
-  const ctx = promptContext(readTranscript(dir), round);
-  const prompt = buildPrompt({
-    charter,
-    self: { handle: participant.handle, perspective: resolvePerspectiveText(participant.perspective) },
-    round,
-    maxRounds: topic.maxRounds,
-    stanceSummary: ctx.stanceSummary,
-    recent: ctx.recent,
-  });
+  const transcript = readTranscript(dir);
+  const self = { handle: participant.handle, perspective: resolvePerspectiveText(participant.perspective) };
+  const ownSeq = lastOwnSeq(transcript, participant.handle);
+  // 增量模式(R4b):会话已续接且此前发过言 → 只发新增,不重发 charter/历史;否则全量
+  let prompt: string;
+  if (participant.sessionRef && ownSeq > 0) {
+    prompt = buildDeltaPrompt({
+      self,
+      round,
+      maxRounds: topic.maxRounds,
+      newSpeeches: deltaContext(transcript, ownSeq),
+    });
+  } else {
+    const ctx = promptContext(transcript, round);
+    prompt = buildPrompt({
+      charter,
+      self,
+      round,
+      maxRounds: topic.maxRounds,
+      stanceSummary: ctx.stanceSummary,
+      recent: ctx.recent,
+    });
+  }
   const result = await adapter.speak({
     prompt,
     sessionRef: participant.sessionRef ?? undefined,
     model: participant.model ?? undefined,
-    cwd: dir,
+    cwd: topic.repo ?? dir,
+    codeAccess: !!topic.repo,
     timeoutMs,
   });
   const tokens = {
     input: participant.tokens.input + (result.tokens?.input ?? 0),
+    cached: participant.tokens.cached + (result.tokens?.cached ?? 0),
     output: participant.tokens.output + (result.tokens?.output ?? 0),
   };
   const event = isSkip(result.text)

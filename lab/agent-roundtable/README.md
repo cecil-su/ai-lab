@@ -45,7 +45,20 @@ roundtable new "选型:tRPC vs REST" --providers opencode,reasonix --model gpt-5
 
 # 零成本演练:mock provider 从脚本读预设发言(不消耗真实 token)
 roundtable new "演示话题" --providers mock:./fixtures/a.txt,mock:./fixtures/b.txt
+
+# 注入参考材料:把文件读进 charter 的「## 参考材料」段,所有参与者(含 claude)都能读到
+roundtable new "审查这个模块的设计缺陷" --providers claude,codex \
+  --context-file README.md,src/engine/runner.ts
+roundtable new "审查 src 目录" --providers claude,codex \
+  --context-dir src/engine --context-glob "*.ts"
+
+# 自读:让参与者在只读下自己检索代码仓库(codex/opencode/reasonix 用自带文件工具,claude 走 plan 只读)
+roundtable new "审查本仓库的架构缺陷" --providers claude,codex --repo .
 ```
+
+**接触代码的两条路线**(可叠加):
+- `--context-file` / `--context-dir`(可配 `--context-glob "*.ts"`)**注入**:把文件原样嵌入 charter,**所有参与者(含 claude)**都能读到;材料随 charter 每轮重发,注意 token,>200KB 会告警不阻断。
+- `--repo <路径>` **自读**:发言子进程 cwd 指向该仓库并开只读,有文件工具的参与者自己 grep/read;claude 从"禁工具"切到 `--permission-mode plan` 只读工具集。未设时行为不变。
 
 开题时在话题目录写入 `charter.md`(议题、参与者与视角、模式规则、停止条件),随后前台驱动回合。**Ctrl+C** 在当前发言完成后优雅暂停并落盘。
 
@@ -59,10 +72,16 @@ roundtable list --json     # 结构化 frame(id/title/mode/status/round/particip
 ### continue — 从暂停点恢复
 
 ```bash
+# 恢复暂停(paused)的话题
 roundtable continue 2026-07-30-redis-vs-memory
+
+# 续谈:重开已完成(completed)话题,带一个追问继续深入(默认 +1 轮)
+roundtable continue 2026-07-30-redis-vs-memory --ask "针对成本面再深入,给量化依据" --more 2
 ```
 
-各参与者用持久化的 session 引用续接记忆,恢复后能引用暂停前的讨论内容。`completed` 话题会被拒绝。
+各参与者用持久化的 session 引用续接记忆,恢复后能引用之前的讨论内容。
+
+**续谈**:`completed` 话题默认拒绝,但可用 `--ask "<追问>"`(可选 `--more <n>` 加轮、`--as <名字>` 指定插话人)**原地重开**——同一话题延续,追问作为插话注入,续跑后重生成 summary.md。数据全部留在原话题目录;换议题请另开 `new`。
 
 ### attach — TUI 查看 + 插话
 

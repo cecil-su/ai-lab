@@ -6,7 +6,11 @@ import type { ProviderAdapter, SpeakResult } from "./types.js";
 //   新会话  claude -p --output-format json --tools ""(--tools "" 禁全部工具,讨论不需要且压 token)
 //   续接    追加 --resume <session_id>
 //   prompt 经 stdin;输出为单个 JSON 对象:result / session_id / is_error / usage.{input_tokens,...}
-const BASE_ARGS = ["-p", "--output-format", "json", "--tools", ""];
+//   自读(R2):codeAccess 时不禁工具,改 plan 模式(只读,禁写)+ 放开 Read/Grep/Glob,
+//             让它在代码仓库 cwd 下自行检索。⚠ 确切 flag 组合待真机冒烟核准并更新此锚点。
+const BASE_ARGS = ["-p", "--output-format", "json"];
+const DISCUSS_ONLY_ARGS = ["--tools", ""];
+const READONLY_ARGS = ["--permission-mode", "plan", "--allowedTools", "Read", "Grep", "Glob"];
 
 interface ClaudeJson {
   is_error?: boolean;
@@ -41,15 +45,21 @@ export function parseClaudeOutput(stdout: string): SpeakResult {
     sessionRef: json.session_id,
     tokens: u
       ? {
-          // input 记"本次处理的全部上下文"(新增 + 缓存写 + 缓存读),与其他家口径一致
-          input:
-            (u.input_tokens ?? 0) +
-            (u.cache_creation_input_tokens ?? 0) +
-            (u.cache_read_input_tokens ?? 0),
+          // input = 本次新处理(新增 + 缓存写,均全额计费);cached = 缓存读(廉价)
+          input: (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0),
+          cached: u.cache_read_input_tokens ?? 0,
           output: u.output_tokens ?? 0,
         }
       : undefined,
   };
+}
+
+/** 纯参数构造,供单测:讨论态禁工具,自读态开只读工具集 */
+export function buildClaudeArgs(opts: { model?: string; sessionRef?: string; codeAccess?: boolean }): string[] {
+  const args = [...BASE_ARGS, ...(opts.codeAccess ? READONLY_ARGS : DISCUSS_ONLY_ARGS)];
+  if (opts.model) args.push("--model", opts.model);
+  if (opts.sessionRef) args.push("--resume", opts.sessionRef);
+  return args;
 }
 
 export const claudeAdapter: ProviderAdapter = {
@@ -57,10 +67,8 @@ export const claudeAdapter: ProviderAdapter = {
 
   detect: () => detectSimple("claude", "claude", ["--version"]),
 
-  async speak({ prompt, sessionRef, model, cwd, timeoutMs }) {
-    const args = [...BASE_ARGS];
-    if (model) args.push("--model", model);
-    if (sessionRef) args.push("--resume", sessionRef);
+  async speak({ prompt, sessionRef, model, cwd, codeAccess, timeoutMs }) {
+    const args = buildClaudeArgs({ model, sessionRef, codeAccess });
     const { stdout } = await execProvider({
       provider: "claude",
       cmd: "claude",

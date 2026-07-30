@@ -134,7 +134,8 @@ export const reasonixAdapter: ProviderAdapter = {
       let tokens: SpeakResult["tokens"];
       if (fs.existsSync(metricsFile)) {
         const metrics = JSON.parse(fs.readFileSync(metricsFile, "utf8")) as ReasonixMetrics;
-        tokens = { input: metrics.prompt_tokens ?? 0, output: metrics.completion_tokens ?? 0 };
+        // metrics 无缓存拆分,cached 记 0(input 为总 prompt 量)
+        tokens = { input: metrics.prompt_tokens ?? 0, cached: 0, output: metrics.completion_tokens ?? 0 };
       }
       return {
         text,

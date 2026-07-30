@@ -38,6 +38,6 @@ describe("listView (list --json 结构)", () => {
     });
     // mock:<path> 的展示基名收敛为 "mock"
     expect(a.participants.map((p) => p.provider)).toEqual(["mock", "claude"]);
-    expect(a.participants[0]).toMatchObject({ handle: "mock-1", tokens: { input: 0, output: 0 } });
+    expect(a.participants[0]).toMatchObject({ handle: "mock-1", tokens: { input: 0, cached: 0, output: 0 } });
   });
 });

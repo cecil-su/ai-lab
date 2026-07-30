@@ -119,7 +119,7 @@ describe("computeStatusBar", () => {
           perspective: "架构",
           model: null,
           sessionRef: null,
-          tokens: { input: 100, output: 40 },
+          tokens: { input: 100, cached: 0, output: 40 },
         },
         {
           handle: "b",
@@ -128,7 +128,7 @@ describe("computeStatusBar", () => {
           perspective: "成本",
           model: null,
           sessionRef: null,
-          tokens: { input: 60, output: 10 },
+          tokens: { input: 60, cached: 0, output: 10 },
         },
       ],
       ...over,

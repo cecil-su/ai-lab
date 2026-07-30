@@ -13,7 +13,7 @@ export interface Participant {
   perspective: Perspective;
   model: string | null;
   sessionRef: string | null;
-  tokens: { input: number; output: number };
+  tokens: { input: number; cached: number; output: number };
 }
 
 export interface Topic {
@@ -26,6 +26,8 @@ export interface Topic {
   currentRound: number;
   createdAt: string;
   participants: Participant[];
+  /** 自读(R2):参与者发言时的代码仓库 cwd(绝对路径);缺省 = 话题目录、无代码接触 */
+  repo?: string;
 }
 
 export interface ParticipantInput {
@@ -41,6 +43,7 @@ export interface CreateTopicInput {
   mode: TopicMode;
   maxRounds: number;
   participants: ParticipantInput[];
+  repo?: string;
 }
 
 const TOPIC_FILE = "topic.json";
@@ -60,6 +63,7 @@ export function createTopic(root: string, input: CreateTopicInput): Topic {
     maxRounds: input.maxRounds,
     currentRound: 0,
     createdAt: new Date().toISOString(),
+    ...(input.repo ? { repo: input.repo } : {}),
     participants: input.participants.map((p) => ({
       handle: p.handle,
       provider: p.provider,
@@ -67,7 +71,7 @@ export function createTopic(root: string, input: CreateTopicInput): Topic {
       perspective: p.perspective,
       model: p.model ?? null,
       sessionRef: null,
-      tokens: { input: 0, output: 0 },
+      tokens: { input: 0, cached: 0, output: 0 },
     })),
   };
   writeJsonAtomic(path.join(dir, TOPIC_FILE), topic);
@@ -78,6 +82,10 @@ export function loadTopic(dir: string): Topic {
   const raw = JSON.parse(fs.readFileSync(path.join(dir, TOPIC_FILE), "utf8")) as Topic;
   if (raw.version !== 1) {
     throw new Error(`unsupported topic.json version: ${String(raw.version)}`);
+  }
+  // 旧话题 tokens 缺 cached 字段 → 默认 0(向后兼容读)
+  for (const p of raw.participants) {
+    if (p.tokens.cached === undefined) p.tokens = { ...p.tokens, cached: 0 };
   }
   return raw;
 }

@@ -25,6 +25,7 @@ export function parseOpencodeEvents(stdout: string): SpeakResult {
   // 按 part.id 去重(同一块若重复推送以最后一次为准),保持出现顺序
   const textParts = new Map<string, string>();
   let input = 0;
+  let cached = 0;
   let output = 0;
   let sawTokens = false;
   for (const line of stdout.split("\n")) {
@@ -42,7 +43,9 @@ export function parseOpencodeEvents(stdout: string): SpeakResult {
     }
     if (event.type === "step_finish" && part?.tokens) {
       sawTokens = true;
-      input += (part.tokens.input ?? 0) + (part.tokens.cache?.read ?? 0) + (part.tokens.cache?.write ?? 0);
+      // opencode 的 part.tokens.input 是含缓存的总 prompt 量,cache.read 是其中缓存读的子集
+      input += part.tokens.input ?? 0;
+      cached += part.tokens.cache?.read ?? 0;
       output += part.tokens.output ?? 0;
     }
   }
@@ -51,7 +54,7 @@ export function parseOpencodeEvents(stdout: string): SpeakResult {
   return {
     text: [...textParts.values()].join("\n\n"),
     sessionRef: sessionId,
-    tokens: sawTokens ? { input, output } : undefined,
+    tokens: sawTokens ? { input: Math.max(0, input - cached), cached, output } : undefined,
   };
 }
 

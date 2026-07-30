@@ -48,7 +48,8 @@ const roundtable: ModeStrategy = {
       prompt,
       sessionRef: summarizer.sessionRef ?? undefined,
       model: summarizer.model ?? undefined,
-      cwd: dir,
+      cwd: topic.repo ?? dir,
+      codeAccess: !!topic.repo,
       timeoutMs,
     });
 
@@ -63,6 +64,7 @@ const roundtable: ModeStrategy = {
 
     const tokens = {
       input: summarizer.tokens.input + (result.tokens?.input ?? 0),
+      cached: summarizer.tokens.cached + (result.tokens?.cached ?? 0),
       output: summarizer.tokens.output + (result.tokens?.output ?? 0),
     };
     return {
@@ -110,7 +112,8 @@ const debate: ModeStrategy = {
       prompt,
       sessionRef: undefined, // 全新会话,不继承立场方记忆
       model: first.model ?? undefined,
-      cwd: dir,
+      cwd: topic.repo ?? dir,
+      codeAccess: !!topic.repo,
       timeoutMs,
     });
 

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseClaudeOutput } from "../src/adapters/claude.js";
+import { buildClaudeArgs, parseClaudeOutput } from "../src/adapters/claude.js";
 import { parseCodexEvents } from "../src/adapters/codex.js";
 import { parseOpencodeEvents } from "../src/adapters/opencode.js";
 import { cleanReasonixStdout, reasonixSessionsDir } from "../src/adapters/reasonix.js";
@@ -21,13 +21,34 @@ describe("parseClaudeOutput", () => {
     const r = parseClaudeOutput(sample);
     expect(r.text).toBe("PONG");
     expect(r.sessionRef).toBe("a0bb6e0a-6503-4ef8-aa77-73a4fa4b76e7");
-    expect(r.tokens).toEqual({ input: 3909, output: 5 });
+    // claude 三桶不相交:input=新增+缓存写,cached=缓存读
+    expect(r.tokens).toEqual({ input: 3909, cached: 0, output: 5 });
   });
 
   it("throws on is_error / non-success / invalid JSON", () => {
     expect(() => parseClaudeOutput(sample.replace('"is_error":false', '"is_error":true'))).toThrow(/claude 返回错误/);
     expect(() => parseClaudeOutput(sample.replace('"subtype":"success"', '"subtype":"error_during_execution"'))).toThrow(/claude 返回错误/);
     expect(() => parseClaudeOutput("not json")).toThrow(/不是合法 JSON/);
+  });
+});
+
+describe("buildClaudeArgs (R2 自读)", () => {
+  it("讨论态禁全部工具(--tools \"\"),不含只读工具", () => {
+    const args = buildClaudeArgs({});
+    expect(args).toContain("--tools");
+    expect(args).not.toContain("--permission-mode");
+    expect(args).not.toContain("Read");
+  });
+
+  it("自读态开只读工具集,不再禁工具", () => {
+    const args = buildClaudeArgs({ codeAccess: true });
+    expect(args).not.toContain("--tools");
+    expect(args).toEqual(expect.arrayContaining(["--permission-mode", "plan", "--allowedTools", "Read", "Grep", "Glob"]));
+  });
+
+  it("model / sessionRef 追加", () => {
+    const args = buildClaudeArgs({ codeAccess: true, model: "claude-opus-4-8", sessionRef: "s1" });
+    expect(args).toEqual(expect.arrayContaining(["--model", "claude-opus-4-8", "--resume", "s1"]));
   });
 });
 
@@ -44,7 +65,8 @@ describe("parseCodexEvents", () => {
     const r = parseCodexEvents(["banner text", ...lines].join("\n"));
     expect(r.sessionRef).toBe("019fb097-b487-72b2-906c-d39206456bbe");
     expect(r.text).toBe("PONG");
-    expect(r.tokens).toEqual({ input: 16595, output: 27 });
+    // codex 的 input_tokens 含缓存,拆出 cached 后 input=14675-1920
+    expect(r.tokens).toEqual({ input: 12755, cached: 1920, output: 27 });
   });
 
   it("falls back to -o file content when agent_message is missing", () => {
@@ -77,7 +99,8 @@ describe("parseOpencodeEvents", () => {
     const r = parseOpencodeEvents(sample);
     expect(r.sessionRef).toBe(sid);
     expect(r.text).toBe("第一段\n\n第二段");
-    expect(r.tokens).toEqual({ input: 10099, output: 6 });
+    // opencode 的 part.tokens.input 含缓存读,拆出 cached 后 input=9999-100
+    expect(r.tokens).toEqual({ input: 9899, cached: 100, output: 6 });
   });
 
   it("dedupes repeated part ids keeping the last text", () => {

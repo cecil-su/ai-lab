@@ -41,8 +41,12 @@ export function parseCodexEvents(stdout: string, fallbackText?: string): SpeakRe
       text = event.item.text; // 取最后一条 agent message
     }
     if (event.type === "turn.completed" && event.usage) {
+      // codex 的 input_tokens 是含缓存的总量,cached_input_tokens 是其中缓存读的子集
+      const total = event.usage.input_tokens ?? 0;
+      const cached = event.usage.cached_input_tokens ?? 0;
       tokens = {
-        input: (event.usage.input_tokens ?? 0) + (event.usage.cached_input_tokens ?? 0),
+        input: Math.max(0, total - cached),
+        cached,
         output: event.usage.output_tokens ?? 0,
       };
     }

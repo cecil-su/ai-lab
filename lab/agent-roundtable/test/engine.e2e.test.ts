@@ -13,16 +13,18 @@ interface SpeakCall {
   spec: string;
   sessionRef: string | undefined;
   prompt: string;
+  cwd: string;
+  codeAccess: boolean | undefined;
 }
 
-// 包裹真实 resolver,记录每次 speak 的 sessionRef/prompt/spec(用于验证裁决人是全新会话)
+// 包裹真实 resolver,记录每次 speak 的 sessionRef/prompt/spec/cwd/codeAccess
 function recordingResolver(calls: SpeakCall[]): (spec: string) => ProviderAdapter {
   return (spec) => {
     const inner = resolveAdapter(spec);
     return {
       ...inner,
       async speak(o) {
-        calls.push({ spec, sessionRef: o.sessionRef, prompt: o.prompt });
+        calls.push({ spec, sessionRef: o.sessionRef, prompt: o.prompt, cwd: o.cwd, codeAccess: o.codeAccess });
         return inner.speak(o);
       },
     };
@@ -231,6 +233,101 @@ describe("engine e2e (mock providers)", () => {
     await runTopic(dir, { installSignalHandlers: false });
     const t2 = readTranscript(dir);
     expect(t2.filter((e) => e.kind === "system" && e.round === 0)).toHaveLength(1);
+  });
+
+  it("注入的参考材料(charter)出现在发给参与者的 prompt 中", async () => {
+    const p1 = writeScript(root, "ctx1.json", ["看过材料了\n【立场】ok"]);
+    createTopic(root, {
+      id: "ctx-1",
+      title: "带材料的话题",
+      mode: "roundtable",
+      maxRounds: 1,
+      participants: [{ handle: "mock-1", provider: p1, perspective: "a" }],
+    });
+    const dir = path.join(root, "ctx-1");
+    // 模拟 cmdNew 写入含参考材料的 charter
+    fs.writeFileSync(
+      path.join(dir, "charter.md"),
+      "# 话题:带材料的话题\n\n## 参考材料\n### foo.ts\n```ts\nexport const MAGIC = 42;\n```\n",
+    );
+
+    const calls: SpeakCall[] = [];
+    await runTopic(dir, { installSignalHandlers: false, resolveAdapter: recordingResolver(calls) });
+
+    expect(calls[0]!.prompt).toContain("## 参考材料");
+    expect(calls[0]!.prompt).toContain("export const MAGIC = 42;");
+  });
+
+  it("增量 prompt(R4b):首轮全量含 charter,续接轮只发增量且更短", async () => {
+    const p1 = writeScript(root, "inc1.json", ["A轮1\n【立场】a1", "A轮2\n【立场】a2", "A轮3\n【立场】a3"]);
+    const p2 = writeScript(root, "inc2.json", ["B轮1\n【立场】b1", "B轮2\n【立场】b2", "B轮3\n【立场】b3"]);
+    createTopic(root, {
+      id: "inc-1",
+      title: "增量话题",
+      mode: "roundtable",
+      maxRounds: 3,
+      participants: [
+        { handle: "mock-1", provider: p1, perspective: "a" },
+        { handle: "mock-2", provider: p2, perspective: "b" },
+      ],
+    });
+    const dir = path.join(root, "inc-1");
+    // 写一个体量可观的 charter,凸显全量 vs 增量差距
+    fs.writeFileSync(
+      path.join(dir, "charter.md"),
+      "# 话题:增量话题\n\n## 参考材料\nCHARTER_MARK\n" + "背景说明。".repeat(200) + "\n",
+    );
+
+    const calls: SpeakCall[] = [];
+    await runTopic(dir, { installSignalHandlers: false, resolveAdapter: recordingResolver(calls) });
+
+    // 顺序:calls[0]=mock-1 R1, [1]=mock-2 R1, [2]=mock-1 R2, [3]=mock-2 R2, ...
+    const p1r1 = calls[0]!.prompt;
+    const p1r2 = calls[2]!.prompt;
+    // 首轮全量:含 charter 标记
+    expect(p1r1).toContain("CHARTER_MARK");
+    expect(p1r1).toContain("## 发言协议");
+    // 续接轮增量:不含 charter,含最新进展 + 对方上轮发言
+    expect(p1r2).not.toContain("CHARTER_MARK");
+    expect(p1r2).toContain("## 最新进展(你上次发言后)");
+    expect(p1r2).toContain("B轮1");
+    // 增量显著更短
+    expect(p1r2.length).toBeLessThan(p1r1.length / 2);
+  });
+
+  it("自读(R2):设 repo 时 speak 用 repo cwd + codeAccess=true", async () => {
+    const p1 = writeScript(root, "repo1.json", ["读过代码\n【立场】ok"]);
+    const repoDir = path.join(root, "fake-repo");
+    fs.mkdirSync(repoDir);
+    createTopic(root, {
+      id: "repo-1",
+      title: "自读话题",
+      mode: "roundtable",
+      maxRounds: 1,
+      participants: [{ handle: "mock-1", provider: p1, perspective: "a" }],
+      repo: repoDir,
+    });
+    const dir = path.join(root, "repo-1");
+    const calls: SpeakCall[] = [];
+    await runTopic(dir, { installSignalHandlers: false, resolveAdapter: recordingResolver(calls) });
+    expect(calls[0]!.cwd).toBe(repoDir);
+    expect(calls[0]!.codeAccess).toBe(true);
+  });
+
+  it("未设 repo 时 speak 用话题目录 cwd + codeAccess=false(回归)", async () => {
+    const p1 = writeScript(root, "norepo1.json", ["讨论\n【立场】ok"]);
+    createTopic(root, {
+      id: "norepo-1",
+      title: "无 repo 话题",
+      mode: "roundtable",
+      maxRounds: 1,
+      participants: [{ handle: "mock-1", provider: p1, perspective: "a" }],
+    });
+    const dir = path.join(root, "norepo-1");
+    const calls: SpeakCall[] = [];
+    await runTopic(dir, { installSignalHandlers: false, resolveAdapter: recordingResolver(calls) });
+    expect(calls[0]!.cwd).toBe(dir);
+    expect(calls[0]!.codeAccess).toBe(false);
   });
 
   it("checkConverged: all-skip round converges immediately", () => {

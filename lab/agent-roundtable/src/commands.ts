@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeSpec, providerBase, resolveAdapter, isMockSpec } from "./adapters/registry.js";
 import { buildCharter, PERSPECTIVE_TEMPLATES } from "./engine/charter.js";
+import { buildContextMaterial, CONTEXT_MAX_BYTES } from "./engine/context.js";
 import { runTopic } from "./engine/runner.js";
 import { appendInbox } from "./store/inbox.js";
 import { readLock, pidAlive } from "./store/lock.js";
@@ -80,7 +81,7 @@ export async function cmdNew(positional: string[], flags: Flags, ctx: CmdContext
   const root = ctx.root ?? resolveTopicsRoot();
   const title = positional[0];
   if (!title) {
-    console.error('用法: roundtable new "<话题>" --providers <a,b,...> [--perspectives ...] [--mode roundtable] [--max-rounds 3] [--model ...]');
+    console.error('用法: roundtable new "<话题>" --providers <a,b,...> [--perspectives ...] [--mode roundtable] [--max-rounds 3] [--model ...] [--context-file a,b] [--context-dir <dir> [--context-glob "*.ts"]] [--repo <代码仓库>]');
     return 1;
   }
   const specs = csv(flags.providers);
@@ -122,8 +123,41 @@ export async function cmdNew(positional: string[], flags: Flags, ctx: CmdContext
     return { handle: `${base}-${n}`, provider: spec, perspective, model };
   });
 
+  // 注入参考材料(R1):读文件失败直接中止开题
+  let contextMaterial: string | undefined;
+  const hasContextFlags =
+    typeof flags["context-file"] === "string" || typeof flags["context-dir"] === "string";
+  if (hasContextFlags) {
+    const ctx = buildContextMaterial({
+      files: csv(flags["context-file"]),
+      dir: typeof flags["context-dir"] === "string" ? flags["context-dir"] : undefined,
+      glob: typeof flags["context-glob"] === "string" ? flags["context-glob"] : undefined,
+      cwd: process.cwd(),
+    });
+    contextMaterial = ctx.material || undefined;
+    if (ctx.entries.length > 0) {
+      const kb = (ctx.totalBytes / 1024).toFixed(1);
+      console.log(`注入参考材料 ${ctx.entries.length} 个文件,共 ${kb} KB:`);
+      for (const e of ctx.entries) console.log(`  - ${e.label}(${(e.bytes / 1024).toFixed(1)} KB)`);
+      if (ctx.overLimit) {
+        console.error(`⚠ 参考材料超过 ${(CONTEXT_MAX_BYTES / 1024).toFixed(0)} KB 建议上限,将显著增加每轮 token(charter 每轮随 prompt 重发)`);
+      }
+    }
+  }
+
+  // 自读(R2):--repo 指向代码仓库,发言时子进程 cwd 指向它并开只读
+  let repo: string | undefined;
+  if (typeof flags.repo === "string") {
+    repo = path.resolve(flags.repo);
+    if (!fs.existsSync(repo) || !fs.statSync(repo).isDirectory()) {
+      console.error(`--repo 不存在或不是目录: ${flags.repo}`);
+      return 1;
+    }
+    console.log(`自读模式:参与者可在只读下检索代码仓库 ${repo}`);
+  }
+
   const id = uniqueId(root, slugify(title));
-  const topic = createTopic(root, { id, title, mode, maxRounds, participants });
+  const topic = createTopic(root, { id, title, mode, maxRounds, participants, repo });
   const dir = topicDir(root, id);
   fs.writeFileSync(
     path.join(dir, "charter.md"),
@@ -136,6 +170,7 @@ export async function cmdNew(positional: string[], flags: Flags, ctx: CmdContext
         providerBase: providerBase(p.provider),
         perspective: p.perspective,
       })),
+      contextMaterial,
     }),
   );
 
@@ -146,11 +181,11 @@ export async function cmdNew(positional: string[], flags: Flags, ctx: CmdContext
   return 0;
 }
 
-export async function cmdContinue(positional: string[], _flags: Flags, ctx: CmdContext = {}): Promise<number> {
+export async function cmdContinue(positional: string[], flags: Flags, ctx: CmdContext = {}): Promise<number> {
   const root = ctx.root ?? resolveTopicsRoot();
   const id = positional[0];
   if (!id) {
-    console.error("用法: roundtable continue <topic>");
+    console.error('用法: roundtable continue <topic> [--ask "<追问>"] [--more <n>] [--as <名字>]');
     return 1;
   }
   const dir = topicDir(root, id);
@@ -158,12 +193,35 @@ export async function cmdContinue(positional: string[], _flags: Flags, ctx: CmdC
     console.error(`话题不存在: ${id}`);
     return 1;
   }
-  const topic = loadTopic(dir);
+  let topic = loadTopic(dir);
   if (topic.status === "completed") {
-    console.error(`话题已完成,无法继续: ${id}`);
-    return 1;
+    // 续谈(方案 B):重开已完成话题 —— 加轮 + 翻回 active,追问经 inbox 落为 human 事件
+    if (flags.ask === true) {
+      console.error('--ask 需要追问内容,如: --ask "针对X再深入"');
+      return 1;
+    }
+    const ask = typeof flags.ask === "string" ? flags.ask : undefined;
+    if (ask === undefined && flags.more === undefined) {
+      console.error(`话题已完成: ${id}。如需继续深入,用 continue <topic> --ask "<追问>" [--more <n>] 重开`);
+      return 1;
+    }
+    const addRounds = typeof flags.more === "string" ? Number(flags.more) : 1;
+    if (!Number.isInteger(addRounds) || addRounds < 1) {
+      console.error(`--more 需为正整数,收到: ${String(flags.more)}`);
+      return 1;
+    }
+    topic = { ...topic, status: "active", maxRounds: topic.maxRounds + addRounds };
+    saveTopic(dir, topic);
+    if (ask !== undefined) {
+      const from = typeof flags.as === "string" ? flags.as : "user";
+      appendInbox(dir, { kind: "say", from, body: ask });
+      console.log(`重开已完成话题: ${id}(+${addRounds} 轮,追问已注入)\n`);
+    } else {
+      console.log(`重开已完成话题: ${id}(+${addRounds} 轮)\n`);
+    }
+  } else {
+    console.log(`继续话题: ${id}(已完成 ${topic.currentRound}/${topic.maxRounds} 轮)\n`);
   }
-  console.log(`继续话题: ${id}(已完成 ${topic.currentRound}/${topic.maxRounds} 轮)\n`);
   const final = await runTopic(dir, { onEvent: (e) => printEvent(e) });
   console.log(`\n话题状态: ${final.status}`);
   return 0;
