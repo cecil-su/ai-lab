@@ -3,6 +3,7 @@ import path from "node:path";
 import { normalizeSpec, providerBase, resolveAdapter, isMockSpec } from "./adapters/registry.js";
 import { buildCharter, PERSPECTIVE_TEMPLATES } from "./engine/charter.js";
 import { buildContextMaterial, CONTEXT_MAX_BYTES } from "./engine/context.js";
+import { writeFallbackSummary } from "./engine/modes.js";
 import { runTopic } from "./engine/runner.js";
 import { appendInbox } from "./store/inbox.js";
 import { readLock, pidAlive } from "./store/lock.js";
@@ -303,6 +304,11 @@ export function cmdStop(positional: string[], _flags: Flags, ctx: CmdContext = {
   if (topic.status === "completed") {
     console.log(`话题已是完成态: ${id}`);
     return 0;
+  }
+  // #8:置 completed 前补一份终止说明,维持"completed ⇒ summary.md 存在"不变量,
+  // 避免产出无产物的伪完成。仅在无正式 summary 时写(已收尾产出的正式结论不覆盖)。
+  if (!fs.existsSync(path.join(dir, "summary.md"))) {
+    writeFallbackSummary(dir, "经 CLI 人工终止(stop),未运行收尾,无正式结论。");
   }
   saveTopic(dir, transition(topic, "completed"));
   console.log(`已结束话题: ${id}`);

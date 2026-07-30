@@ -1,6 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { listView, slugify } from "../src/commands.js";
-import { createTopic, listTopics } from "../src/store/topic.js";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cmdStop, listView, slugify } from "../src/commands.js";
+import { createTopic, listTopics, loadTopic } from "../src/store/topic.js";
 import { makeTmpDir, removeDir } from "./helpers.js";
 
 describe("listView (list --json 结构)", () => {
@@ -39,6 +41,38 @@ describe("listView (list --json 结构)", () => {
     // mock:<path> 的展示基名收敛为 "mock"
     expect(a.participants.map((p) => p.provider)).toEqual(["mock", "claude"]);
     expect(a.participants[0]).toMatchObject({ handle: "mock-1", tokens: { input: 0, cached: 0, output: 0 } });
+  });
+});
+
+describe("cmdStop 无 runner 补 summary (#8)", () => {
+  let root: string;
+  beforeEach(() => {
+    root = makeTmpDir();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    removeDir(root);
+  });
+
+  it("active 话题无 runner:置 completed 且写终止 summary", () => {
+    createTopic(root, {
+      id: "t",
+      title: "x",
+      mode: "roundtable",
+      maxRounds: 3,
+      participants: [{ handle: "mock-1", provider: "mock:/abs/s.json", perspective: "架构" }],
+    });
+    const dir = path.join(root, "t");
+    expect(loadTopic(dir).status).toBe("active");
+
+    const code = cmdStop(["t"], {}, { root });
+
+    expect(code).toBe(0);
+    expect(loadTopic(dir).status).toBe("completed");
+    // 不再产出无 summary 的伪完成
+    expect(fs.existsSync(path.join(dir, "summary.md"))).toBe(true);
+    expect(fs.readFileSync(path.join(dir, "summary.md"), "utf8")).toContain("人工终止");
   });
 });
 
