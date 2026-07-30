@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveAdapter } from "../adapters/registry.js";
-import { REASONIX_LAST_SESSION } from "../adapters/reasonix.js";
 import type { ProviderAdapter, SpeakResult } from "../adapters/types.js";
 import { readInboxRaw, consumedUpTo, markConsumed } from "../store/inbox.js";
 import { acquireLock, releaseLock } from "../store/lock.js";
@@ -12,7 +11,8 @@ import {
   type TranscriptEvent,
 } from "../store/transcript.js";
 import { resolvePerspectiveText } from "./charter.js";
-import { selectMode } from "./modes.js";
+import { selectMode, writeFallbackSummary } from "./modes.js";
+import { isTrustedRef } from "./session-trust.js";
 import {
   buildDeltaPrompt,
   buildPrompt,
@@ -33,14 +33,6 @@ const FAILURE_CIRCUIT_THRESHOLD = 3;
 function errText(err: unknown): string {
   const m = err instanceof Error ? err.message : String(err);
   return m.length > 300 ? m.slice(0, 300) + "…" : m;
-}
-
-// 降级/不可信 sessionRef 哨兵集合:这些无法唯一定位"该参与者自己的线程",不得走增量(F4①)
-const DEGRADED_REFS = new Set<string>([REASONIX_LAST_SESSION]);
-
-/** sessionRef 是否可信到能安全走增量:非空且非降级哨兵 */
-function isTrustedRef(ref: string | null | undefined): boolean {
-  return !!ref && !DEGRADED_REFS.has(ref);
 }
 
 export interface RunOptions {
@@ -213,14 +205,15 @@ export async function runTopic(dir: string, opts: RunOptions = {}): Promise<Topi
         round: topic.currentRound,
         body: `收尾失败: ${errText(err)}`,
       }));
-      // F10:兜底 summary,避免 completed 却无产物(伪完成)
-      const summaryFile = path.join(dir, "summary.md");
-      if (!fs.existsSync(summaryFile)) {
-        fs.writeFileSync(
-          summaryFile,
-          `# 总结生成失败\n\n> 讨论本身已完成,但收尾/裁决环节失败,未能生成正式总结。\n\n失败原因:${errText(err)}\n`,
-        );
-      }
+      // 兜底 summary,避免 completed 却无产物(伪完成)。
+      // #5:无条件覆盖,而非"存在即跳过"——续谈时旧代已产 summary.md,本代失败必须让用户看到,
+      // 不能把旧结论当本代结论保留。
+      writeFallbackSummary(
+        dir,
+        `讨论本身已完成,但收尾/裁决环节失败,未能生成正式总结。失败原因:${errText(err)}`,
+      );
+      // #5:收尾失败作废末位总结者的会话引用,避免续谈时带着可能失效/被污染的 ref 走增量
+      topic = clearSession(topic, topic.participants[topic.participants.length - 1]!.handle);
     }
     topic = transition(topic, "completed");
     saveTopic(dir, topic);

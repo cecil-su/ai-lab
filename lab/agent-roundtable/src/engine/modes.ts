@@ -11,8 +11,14 @@ import type { Topic, TopicMode } from "../store/topic.js";
 import { appendEvent, readTranscript, type TranscriptEvent } from "../store/transcript.js";
 import { resolvePerspectiveText } from "./charter.js";
 import { buildPrompt, promptContext } from "./prompt.js";
+import { isTrustedRef } from "./session-trust.js";
 
 const SUMMARY_FILE = "summary.md";
+
+/** 无正式结论时写一份说明性 summary.md(覆盖语义)。供 finalize 失败兜底(#5)与无 runner 的 stop(#8)复用。 */
+export function writeFallbackSummary(dir: string, reason: string): void {
+  fs.writeFileSync(path.join(dir, SUMMARY_FILE), `# 无正式结论\n\n> ${reason}\n`);
+}
 
 export interface FinaleContext {
   dir: string;
@@ -46,7 +52,8 @@ const roundtable: ModeStrategy = {
 
     const result = await adapter.speak({
       prompt,
-      sessionRef: summarizer.sessionRef ?? undefined,
+      // 与普通轮同一信任闸门:降级/不可信 ref(如 @last)不得走增量,否则可能续错线程(#5)
+      sessionRef: isTrustedRef(summarizer.sessionRef) ? summarizer.sessionRef! : undefined,
       model: summarizer.model ?? undefined,
       cwd: topic.repo ?? dir,
       codeAccess: !!topic.repo,
@@ -95,6 +102,23 @@ const debate: ModeStrategy = {
     const adapter = adapters.get(first.handle)!;
     const judgeHandle = `${providerBase(first.provider)}-judge`;
     const verdictRound = topic.currentRound + 1;
+
+    // #6 崩溃幂等:verdict 已 append 但 status 未 completed 时崩溃,恢复后会重跑 finalize。
+    // transcript(append-only)里已存在本代 verdict 即视为"裁决已发生",据其重建 summary,
+    // 不再二次调用裁决人(否则产生重复/冲突裁决)。
+    const existingVerdict = readTranscript(dir).find(
+      (e) => e.kind === "verdict" && e.round === verdictRound,
+    );
+    if (existingVerdict?.body) {
+      const header = `# 裁决:${topic.title}\n\n> 模式 ${topic.mode} · 辩论 ${topic.currentRound}/${topic.maxRounds} 轮${converged ? " · 已收敛" : ""} · 裁决人 ${existingVerdict.from ?? judgeHandle}\n\n`;
+      fs.writeFileSync(path.join(dir, SUMMARY_FILE), header + existingVerdict.body.trim() + "\n");
+      emit(appendEvent(dir, {
+        kind: "system",
+        round: verdictRound,
+        body: "检测到已有裁决,据其重建 summary.md(崩溃幂等恢复)",
+      }));
+      return topic;
+    }
 
     // round+1:全部辩论轮压成立场摘要 + 最后一轮全文,喂给无记忆的裁决人
     const ctx = promptContext(readTranscript(dir), verdictRound, topic.resumeFromSeq ?? 0);

@@ -405,9 +405,9 @@ describe("engine e2e (mock providers)", () => {
     const done = await runTopic(dir, { installSignalHandlers: false, resolveAdapter: resolver });
     expect(done.status).toBe("completed");
     expect(readTranscript(dir).some((e) => e.kind === "error")).toBe(true);
-    // F10:finalize 失败仍写兜底 summary.md,避免伪完成
+    // F10/#5:finalize 失败仍写兜底 summary.md(无正式结论),避免伪完成
     const summary = fs.readFileSync(path.join(dir, "summary.md"), "utf8");
-    expect(summary).toContain("总结生成失败");
+    expect(summary).toContain("无正式结论");
   });
 
   it("F8:成功过一轮后再失败 → sessionRef 被作废(下轮全量新会话)", async () => {
