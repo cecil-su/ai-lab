@@ -95,14 +95,23 @@ function listSessionFiles(dir: string): string[] {
   return fs.readdirSync(dir).filter((f) => f.endsWith(".jsonl"));
 }
 
-/** 在 sessions 目录中找本次运行新建的会话文件;找不到则降级 @last */
-function captureSessionRef(sessionsDir: string, before: Set<string>): string {
+/**
+ * 在 sessions 目录中定位本次运行新建的会话文件。
+ * 只有窗口内恰好新增 1 个文件才能唯一归属本次调用 → 返回其绝对路径(可信,下轮走增量)。
+ * 新增 0 个(未定位)或多个(并发同 cwd,差集混入他进程文件)都无法唯一归属 → 降级 @last;
+ * runner 的 isTrustedRef 会把 @last 判为不可信 → 下轮全量新会话,不会误续他进程线程(#4)。
+ */
+export function captureSessionRef(sessionsDir: string, before: Set<string>): string {
   const created = listSessionFiles(sessionsDir).filter((f) => !before.has(f));
-  if (created.length === 0) return REASONIX_LAST_SESSION;
-  const newest = created
-    .map((f) => ({ f, mtime: fs.statSync(path.join(sessionsDir, f)).mtimeMs }))
-    .sort((a, b) => b.mtime - a.mtime)[0]!;
-  return path.join(sessionsDir, newest.f);
+  if (created.length !== 1) {
+    if (created.length > 1) {
+      console.warn(
+        `[reasonix] 运行窗口出现 ${created.length} 个新会话文件(疑似并发同 cwd),无法唯一归属,降级为全量新会话`,
+      );
+    }
+    return REASONIX_LAST_SESSION;
+  }
+  return path.join(sessionsDir, created[0]!);
 }
 
 export const reasonixAdapter: ProviderAdapter = {
