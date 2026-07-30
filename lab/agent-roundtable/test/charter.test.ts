@@ -38,4 +38,22 @@ describe("buildCharter", () => {
     expect(md).toContain("## 裁决安排");
     expect(md).toContain("claude-judge");
   });
+
+  it("传 contextMaterial 时注入参考材料段,在停止条件之前", () => {
+    const md = buildCharter({
+      title: "缓存选型",
+      mode: "roundtable",
+      maxRounds: 3,
+      participants,
+      contextMaterial: "## 参考材料\n### foo.ts\n```ts\nconst x = 1;\n```",
+    });
+    expect(md).toContain("## 参考材料");
+    expect(md).toContain("const x = 1;");
+    expect(md.indexOf("## 参考材料")).toBeLessThan(md.indexOf("## 停止条件"));
+  });
+
+  it("不传 contextMaterial 时不出现参考材料段", () => {
+    const md = buildCharter({ title: "缓存选型", mode: "roundtable", maxRounds: 3, participants });
+    expect(md).not.toContain("## 参考材料");
+  });
 });

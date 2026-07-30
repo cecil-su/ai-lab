@@ -34,6 +34,8 @@ export interface CharterInput {
   mode: TopicMode;
   maxRounds: number;
   participants: CharterParticipant[];
+  /** 注入的参考材料(已拼好的 markdown 段正文),缺省不注入 */
+  contextMaterial?: string;
 }
 
 export function buildCharter(input: CharterInput): string {
@@ -51,6 +53,9 @@ export function buildCharter(input: CharterInput): string {
     sections.push(
       `## 裁决安排\n交锋结束后由「${judge}」以中立裁决人身份、全新无记忆会话收尾,输出:结论 / 关键论据 / 分歧点 / 风险,写入 summary。`,
     );
+  }
+  if (input.contextMaterial && input.contextMaterial.trim()) {
+    sections.push(input.contextMaterial.trim());
   }
   sections.push(
     [
