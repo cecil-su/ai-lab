@@ -1,0 +1,29 @@
+{
+  "name": "agent-roundtable",
+  "version": "0.0.0",
+  "private": true,
+  "description": "roundtable - multi AI-CLI topic discussion tool",
+  "type": "module",
+  "bin": {
+    "roundtable": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "smoke:adapters": "tsx scripts/smoke-adapters.ts",
+    "smoke:tui": "tsx scripts/smoke-tui.tsx"
+  },
+  "dependencies": {
+    "ink": "^6.0.0",
+    "react": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.1.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.4"
+  }
+}
