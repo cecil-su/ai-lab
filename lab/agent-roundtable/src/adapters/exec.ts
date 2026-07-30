@@ -1,4 +1,14 @@
 import { spawn } from "node:child_process";
+import treeKill from "tree-kill";
+
+/** 杀掉以 pid 为根的整棵进程树(含 detached 孙进程)。tree-kill 按 ppid 递归,
+ *  Windows 走 taskkill /T /F、POSIX 走进程树遍历。回调 err 吞掉(进程可能已退)。 */
+function killTree(pid: number | undefined): Promise<void> {
+  return new Promise((resolve) => {
+    if (pid === undefined) return resolve();
+    treeKill(pid, "SIGKILL", () => resolve());
+  });
+}
 
 export interface ExecOutput {
   stdout: string;
@@ -40,14 +50,16 @@ export function execProvider(opts: {
 
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill();
+      // 杀整树(含 detached 孙进程),而非仅直接子进程;整树退出后 'close' 触发再 reject
+      void killTree(child.pid);
     }, opts.timeoutMs);
 
+    // 流错误等失败路径:先杀整树再 reject,避免 detached 孙进程遗留继续耗 token/写仓库
     const fail = (err: ProviderExecError) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      reject(err);
+      void killTree(child.pid).finally(() => reject(err));
     };
 
     child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
