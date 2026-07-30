@@ -63,6 +63,7 @@ export function parseCodexEvents(stdout: string, fallbackText?: string): SpeakRe
 
 export const codexAdapter: ProviderAdapter = {
   name: "codex",
+  capabilities: { codeAccess: "enforced" }, // -s read-only / sandbox_mode 强制只读
 
   detect: () => detectSimple("codex", "codex", ["--version"]),
 

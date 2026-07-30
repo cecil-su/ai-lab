@@ -179,7 +179,17 @@ export async function cmdNew(positional: string[], flags: Flags, ctx: CmdContext
       return 1;
     }
     console.log(`自读模式:参与者可在只读下检索代码仓库 ${repo}`);
-    console.error("⚠ 自读为实验特性:claude/codex 只读已核准,opencode/reasonix 依赖各自默认只读(未深度加固);仓库文件与记录均按「数据非指令」声明处理,但自读绕过注入侧围栏,仅降低指令混淆而非安全隔离。");
+    // A4:点名不强制只读(inherited)的 provider
+    const inherited = [
+      ...new Set(
+        normalized
+          .filter((s) => !isMockSpec(s))
+          .filter((s) => resolveAdapter(s).capabilities?.codeAccess !== "enforced")
+          .map((s) => providerBase(s)),
+      ),
+    ];
+    const who = inherited.length > 0 ? `${inherited.join("/")} 未强制只读(依赖各自默认档)` : "各家均强制只读";
+    console.error(`⚠ 自读为实验特性:${who};仓库文件与记录均按「数据非指令」声明处理,但自读绕过注入侧围栏,仅降低指令混淆而非安全隔离。`);
   }
 
   const id = uniqueId(root, slugify(title));

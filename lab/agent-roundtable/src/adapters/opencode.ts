@@ -60,6 +60,7 @@ export function parseOpencodeEvents(stdout: string): SpeakResult {
 
 export const opencodeAdapter: ProviderAdapter = {
   name: "opencode",
+  capabilities: { codeAccess: "inherited" }, // 仅换 cwd,依赖 opencode 默认档(未强制只读)
 
   detect: () => detectSimple("opencode", "opencode", ["--version"]),
 

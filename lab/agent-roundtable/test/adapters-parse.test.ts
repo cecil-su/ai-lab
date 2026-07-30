@@ -1,9 +1,9 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildClaudeArgs, parseClaudeOutput } from "../src/adapters/claude.js";
-import { parseCodexEvents } from "../src/adapters/codex.js";
-import { parseOpencodeEvents } from "../src/adapters/opencode.js";
-import { cleanReasonixStdout, reasonixSessionsDir } from "../src/adapters/reasonix.js";
+import { buildClaudeArgs, claudeAdapter, parseClaudeOutput } from "../src/adapters/claude.js";
+import { codexAdapter, parseCodexEvents } from "../src/adapters/codex.js";
+import { opencodeAdapter, parseOpencodeEvents } from "../src/adapters/opencode.js";
+import { cleanReasonixStdout, reasonixAdapter, reasonixSessionsDir } from "../src/adapters/reasonix.js";
 
 // 样张均取自 2026-07-30 本机实测输出(claude 2.1.220 / codex 0.145.0 / opencode 1.18.9 / reasonix 1.8.0-rc.1)
 
@@ -29,6 +29,15 @@ describe("parseClaudeOutput", () => {
     expect(() => parseClaudeOutput(sample.replace('"is_error":false', '"is_error":true'))).toThrow(/claude 返回错误/);
     expect(() => parseClaudeOutput(sample.replace('"subtype":"success"', '"subtype":"error_during_execution"'))).toThrow(/claude 返回错误/);
     expect(() => parseClaudeOutput("not json")).toThrow(/不是合法 JSON/);
+  });
+});
+
+describe("adapter capabilities (A4)", () => {
+  it("claude/codex 强制只读 enforced,opencode/reasonix inherited", () => {
+    expect(claudeAdapter.capabilities?.codeAccess).toBe("enforced");
+    expect(codexAdapter.capabilities?.codeAccess).toBe("enforced");
+    expect(opencodeAdapter.capabilities?.codeAccess).toBe("inherited");
+    expect(reasonixAdapter.capabilities?.codeAccess).toBe("inherited");
   });
 });
 

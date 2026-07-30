@@ -107,6 +107,7 @@ function captureSessionRef(sessionsDir: string, before: Set<string>): string {
 
 export const reasonixAdapter: ProviderAdapter = {
   name: "reasonix",
+  capabilities: { codeAccess: "inherited" }, // 仅换 cwd,依赖 reasonix 默认档(未强制只读)
 
   detect: () => detectReasonix(),
 

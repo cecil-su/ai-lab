@@ -21,4 +21,11 @@ export interface ProviderAdapter {
   name: string;
   detect(): Promise<{ ok: boolean; version?: string }>;
   speak(opts: SpeakOptions): Promise<SpeakResult>;
+  /**
+   * 能力声明(A4):codeAccess 的只读语义各家不同——
+   * enforced = 由 flag 强制只读(claude plan / codex -s read-only);
+   * inherited = 仅换 cwd,依赖该 CLI 自身默认(opencode/reasonix/mock,未强制)。
+   * 用于 --repo 时点名不强制只读的 provider;硬截止线:--repo 转正/v2 前须对 inherited 默认拒绝。
+   */
+  capabilities?: { codeAccess: "enforced" | "inherited" };
 }

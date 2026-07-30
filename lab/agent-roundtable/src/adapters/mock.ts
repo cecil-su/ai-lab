@@ -9,6 +9,7 @@ interface MockScript {
 export function createMockAdapter(scriptPath: string): ProviderAdapter {
   return {
     name: "mock",
+    capabilities: { codeAccess: "inherited" }, // mock 不消费 codeAccess
 
     async detect() {
       return { ok: true, version: "mock" };
