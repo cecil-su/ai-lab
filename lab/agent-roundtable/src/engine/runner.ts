@@ -3,7 +3,7 @@ import path from "node:path";
 import { resolveAdapter } from "../adapters/registry.js";
 import { REASONIX_LAST_SESSION } from "../adapters/reasonix.js";
 import type { ProviderAdapter, SpeakResult } from "../adapters/types.js";
-import { readPending, markConsumed } from "../store/inbox.js";
+import { readInboxRaw, consumedUpTo, markConsumed } from "../store/inbox.js";
 import { acquireLock, releaseLock } from "../store/lock.js";
 import { loadTopic, saveTopic, transition, type Participant, type Topic } from "../store/topic.js";
 import {
@@ -219,8 +219,15 @@ function drainInbox(
   emit: (e: TranscriptEvent) => void,
   onStop: () => void,
 ): void {
-  const pending = readPending(dir);
-  if (pending.length === 0) return;
+  const { entries, totalLines, badLines } = readInboxRaw(dir);
+  const cursor = consumedUpTo(dir);
+  const pending = entries.filter((e) => e.line > cursor);
+  const badInRange = badLines.filter((n) => n > cursor);
+  if (pending.length === 0 && badInRange.length === 0) return;
+  // A2:坏行(并发写入字节交错)落一条命名损失 error 事件,不静默跳过、也不因坏行自锁死整场
+  for (const n of badInRange) {
+    emit(appendEvent(dir, { kind: "error", round, body: `inbox 第 ${n} 行损坏,已跳过(可能丢失一条插话)` }));
+  }
   for (const entry of pending) {
     if (entry.kind === "stop") {
       onStop();
@@ -229,7 +236,7 @@ function drainInbox(
       emit(event);
     }
   }
-  markConsumed(dir, pending[pending.length - 1]!.id);
+  markConsumed(dir, totalLines);
 }
 
 interface SpeechResult {

@@ -472,6 +472,30 @@ describe("engine e2e (mock providers)", () => {
     expect(warn).toBeDefined();
   });
 
+  it("A2:inbox 坏行落 error 事件、正常插话仍消费、讨论继续", async () => {
+    const p1 = writeScript(root, "a2.json", ["回应\n【立场】ok"]);
+    createTopic(root, {
+      id: "a2-1",
+      title: "坏行容错",
+      mode: "roundtable",
+      maxRounds: 1,
+      participants: [{ handle: "mock-1", provider: p1, perspective: "a" }],
+    });
+    const dir = path.join(root, "a2-1");
+    // 一条坏行 + 一条正常插话
+    fs.appendFileSync(path.join(dir, "inbox.jsonl"), "{坏行}\n");
+    appendInbox(dir, { kind: "say", from: "cecil", body: "正常追问" });
+
+    await runTopic(dir, { installSignalHandlers: false });
+
+    const events = readTranscript(dir);
+    // 坏行 → error 事件
+    expect(events.some((e) => e.kind === "error" && (e.body ?? "").includes("损坏"))).toBe(true);
+    // 正常插话 → human 事件被消费
+    expect(events.some((e) => e.kind === "human" && e.body === "正常追问")).toBe(true);
+    expect(loadTopic(dir).status).toBe("completed");
+  });
+
   it("checkConverged: all-skip round converges immediately", () => {
     const events = readTranscriptFrom([
       { seq: 1, ts: "", kind: "skip", round: 1, from: "a" },

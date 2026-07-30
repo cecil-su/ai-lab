@@ -6,6 +6,7 @@ import {
   consumedUpTo,
   markConsumed,
   readInbox,
+  readInboxRaw,
   readPending,
   INBOX_FILE,
 } from "../src/store/inbox.js";
@@ -52,5 +53,37 @@ describe("inbox store", () => {
     markConsumed(dir, 2);
     markConsumed(dir, 1);
     expect(consumedUpTo(dir)).toBe(2);
+  });
+
+  it("A2:中间坏行(字节交错)被跳过并计入 totalLines/badLines", () => {
+    appendInbox(dir, { kind: "say", from: "a", body: "one" });
+    // 模拟并发交错产生的中间坏行
+    fs.appendFileSync(path.join(dir, INBOX_FILE), "{损坏的半行}\n");
+    appendInbox(dir, { kind: "say", from: "a", body: "three" });
+    const raw = readInboxRaw(dir);
+    expect(raw.entries.map((e) => e.body)).toEqual(["one", "three"]);
+    expect(raw.entries.map((e) => e.line)).toEqual([1, 3]); // 坏行占了第 2 行
+    expect(raw.badLines).toEqual([2]);
+    expect(raw.totalLines).toBe(3);
+    // readInbox 只返回好条目
+    expect(readInbox(dir)).toHaveLength(2);
+  });
+
+  it("A2:markConsumed 按物理行推进(坏行也越过),readPending 清空", () => {
+    appendInbox(dir, { kind: "say", from: "a", body: "one" });
+    fs.appendFileSync(path.join(dir, INBOX_FILE), "{坏}\n");
+    appendInbox(dir, { kind: "say", from: "a", body: "three" });
+    markConsumed(dir, readInboxRaw(dir).totalLines); // 消费到第 3 行
+    expect(readPending(dir)).toEqual([]);
+    expect(consumedUpTo(dir)).toBe(3);
+  });
+
+  it("A2:兼容旧 { consumed:<id> } 游标(迁移为行数)", () => {
+    appendInbox(dir, { kind: "say", from: "a", body: "one" });
+    appendInbox(dir, { kind: "say", from: "a", body: "two" });
+    // 手写旧格式游标
+    fs.writeFileSync(path.join(dir, "inbox.cursor"), JSON.stringify({ consumed: 1 }));
+    expect(consumedUpTo(dir)).toBe(1); // id<=1 的条目数 = 1 行
+    expect(readPending(dir).map((e) => e.body)).toEqual(["two"]);
   });
 });
