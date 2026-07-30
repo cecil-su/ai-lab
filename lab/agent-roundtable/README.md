@@ -57,7 +57,7 @@ roundtable new "审查本仓库的架构缺陷" --providers claude,codex --repo 
 ```
 
 **接触代码的两条路线**(可叠加):
-- `--context-file` / `--context-dir`(可配 `--context-glob "*.ts"`)**注入**:把文件嵌入 charter,**所有参与者(含 claude)**都能读到;材料随 charter 每轮重发,注意 token,>200KB 会告警不阻断。注入侧做了**降低指令混淆**的基础处理(材料前置"数据非指令"声明、动态代码围栏防逃逸、二进制文件跳过),但不等于安全隔离——被评审文件本就是不可信输入。
+- `--context-file` / `--context-dir`(**递归**子目录,可配 `--context-glob "*.ts"` 按文件名过滤)**注入**:把文件嵌入 charter,**所有参与者(含 claude)**都能读到;材料随 charter 每轮重发,注意 token,超 200KB 上限会**硬裁剪尾部文件**并在材料里列出被裁清单(不静默)。注入侧做了**降低指令混淆**的基础处理(材料前置"数据非指令"声明、动态代码围栏防逃逸、二进制文件跳过),但不等于安全隔离——被评审文件本就是不可信输入。
 - `--repo <路径>` **自读(实验)**:发言子进程 cwd 指向该仓库并开只读,有文件工具的参与者自己 grep/read;claude 从"禁工具"切到 `--permission-mode plan Read/Grep/Glob`(已真机核准,`doctor --readonly` 可复验),codex 已 `-s read-only`;opencode/reasonix 依赖各自默认只读,未深度加固。**注意**:自读路径**绕过**注入侧的围栏防护——仓库文件与 transcript 会被声明为"数据非指令",但这只是**降低指令混淆**,不构成安全隔离。未设 `--repo` 时行为不变。
 
 charter 还会附一行**讨论记录自读**提示:完整 `transcript.jsonl` 供有文件工具的参与者**按需**逐字回看全场(注入+增量仍是每轮主通道,常规发言无需读它,不重复烧 token)。

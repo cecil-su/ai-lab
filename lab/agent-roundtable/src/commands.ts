@@ -43,12 +43,17 @@ export function parseArgs(argv: string[]): { positional: string[]; flags: Flags 
   return { positional, flags };
 }
 
-function slugify(title: string): string {
-  const ascii = title
+// A5:保留 CJK/字母/数字,仅折叠文件系统不安全字符与空白 → 中文标题也产出可辨认 id;限长 60
+export function slugify(title: string): string {
+  const slug = title
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return ascii || "topic";
+    .replace(/[<>:"/\\|?*\x00-\x1f]+/g, "-") // 文件系统不安全字符
+    .replace(/\s+/g, "-") // 空白
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60)
+    .replace(/-+$/g, ""); // 截断后可能留尾部 -
+  return slug || "topic";
 }
 
 function uniqueId(root: string, base: string): string {
@@ -159,6 +164,9 @@ export async function cmdNew(positional: string[], flags: Flags, ctx: CmdContext
     }
     if (ctx.skipped.length > 0) {
       console.error(`⚠ 跳过 ${ctx.skipped.length} 个二进制文件(未注入): ${ctx.skipped.join(", ")}`);
+    }
+    if (ctx.dropped.length > 0) {
+      console.error(`⚠ 硬裁剪 ${ctx.dropped.length} 个超体量上限的文件(未注入): ${ctx.dropped.join(", ")}`);
     }
   }
 

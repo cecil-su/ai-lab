@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { listView } from "../src/commands.js";
+import { listView, slugify } from "../src/commands.js";
 import { createTopic, listTopics } from "../src/store/topic.js";
 import { makeTmpDir, removeDir } from "./helpers.js";
 
@@ -39,5 +39,24 @@ describe("listView (list --json 结构)", () => {
     // mock:<path> 的展示基名收敛为 "mock"
     expect(a.participants.map((p) => p.provider)).toEqual(["mock", "claude"]);
     expect(a.participants[0]).toMatchObject({ handle: "mock-1", tokens: { input: 0, cached: 0, output: 0 } });
+  });
+});
+
+describe("slugify (A5:中文标题产出可辨认 id)", () => {
+  it("保留中文,不塌成空", () => {
+    const s = slugify("服务端缓存选型:Redis vs 进程内存");
+    expect(s).not.toBe("topic");
+    expect(s).toContain("redis");
+    expect(s).toContain("服务端缓存选型");
+  });
+
+  it("折叠空白与不安全字符,限长 60", () => {
+    expect(slugify("a b/c")).toBe("a-b-c");
+    expect(slugify("x".repeat(100)).length).toBeLessThanOrEqual(60);
+  });
+
+  it("纯符号/空标题回退 topic", () => {
+    expect(slugify("///")).toBe("topic");
+    expect(slugify("")).toBe("topic");
   });
 });
