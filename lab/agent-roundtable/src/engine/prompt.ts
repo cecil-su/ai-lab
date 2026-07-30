@@ -131,10 +131,12 @@ export function buildDeltaPrompt(inp: DeltaPromptInput): string {
 export function promptContext(
   events: TranscriptEvent[],
   round: number,
+  sinceSeq = 0,
 ): { stanceSummary: StanceLine[]; recent: RecentSpeech[] } {
   const stanceSummary: StanceLine[] = [];
   const recent: RecentSpeech[] = [];
   for (const e of events) {
+    if (e.seq <= sinceSeq) continue; // F9:续谈水位线下界,挡住旧裁决/旧收尾回流
     if (e.kind === "message" && e.from && e.round >= 1 && e.round <= round - 2) {
       stanceSummary.push({ round: e.round, from: e.from, stance: e.stance ?? (e.body ? stanceDigest(e.body) : "") });
     }

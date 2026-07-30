@@ -405,10 +405,38 @@ describe("engine e2e (mock providers)", () => {
     const done = await runTopic(dir, { installSignalHandlers: false, resolveAdapter: resolver });
     expect(done.status).toBe("completed");
     expect(readTranscript(dir).some((e) => e.kind === "error")).toBe(true);
+    // F10:finalize 失败仍写兜底 summary.md,避免伪完成
+    const summary = fs.readFileSync(path.join(dir, "summary.md"), "utf8");
+    expect(summary).toContain("总结生成失败");
+  });
+
+  it("F8:成功过一轮后再失败 → sessionRef 被作废(下轮全量新会话)", async () => {
+    let call = 0;
+    const flaky: ProviderAdapter = {
+      name: "flaky",
+      async detect() { return { ok: true }; },
+      async speak() {
+        call++;
+        if (call === 1) return { text: "第一轮\n【立场】a", sessionRef: "real-sid", tokens: { input: 1, cached: 0, output: 1 } };
+        throw new Error("第二轮挂了");
+      },
+    };
+    createTopic(root, {
+      id: "f8-1",
+      title: "失败作废会话",
+      mode: "roundtable",
+      maxRounds: 2,
+      participants: [{ handle: "mock-1", provider: "mock:x", perspective: "a" }],
+    });
+    const dir = path.join(root, "f8-1");
+    const done = await runTopic(dir, { installSignalHandlers: false, resolveAdapter: () => flaky });
+    // 第1轮拿到 real-sid,第2轮失败 → 作废回 null
+    expect(done.participants[0]!.sessionRef).toBeNull();
   });
 
   it("F4①:降级 sessionRef(@last)→ 全量 prompt + 告警,不走增量", async () => {
     const prompts: string[] = [];
+    const refsSeen: (string | undefined)[] = [];
     let turn = 0;
     // 模拟 reasonix 降级:每次返回 @last 哨兵
     const degraded: ProviderAdapter = {
@@ -416,6 +444,7 @@ describe("engine e2e (mock providers)", () => {
       async detect() { return { ok: true }; },
       async speak(o) {
         prompts.push(o.prompt);
+        refsSeen.push(o.sessionRef);
         turn++;
         return { text: `发言${turn}\n【立场】s${turn}`, sessionRef: REASONIX_LAST_SESSION, tokens: { input: 1, cached: 0, output: 1 } };
       },
@@ -434,6 +463,8 @@ describe("engine e2e (mock providers)", () => {
 
     // 第2轮:sessionRef=@last(降级)→ 仍全量(含 charter),而非增量
     expect(prompts[1]).toContain("F4_CHARTER_MARK");
+    // F8:降级 ref 不传给 adapter(传 undefined 走新会话,不再 -c 续错线程)
+    expect(refsSeen[1]).toBeUndefined();
     // 告警事件已写入
     const warn = readTranscript(dir).find(
       (e) => e.kind === "system" && (e.body ?? "").includes("会话降级"),

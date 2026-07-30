@@ -234,7 +234,15 @@ export async function cmdContinue(positional: string[], flags: Flags, ctx: CmdCo
       console.error(`--more 需为正整数,收到: ${String(flags.more)}`);
       return 1;
     }
-    topic = transition({ ...topic, maxRounds: topic.maxRounds + addRounds }, "active");
+    // F9:重开水位线——resumeFromSeq 置为当时 lastSeq,currentRound 推到最大轮号(过裁决轮),
+    // maxRounds 相对新起点加轮,避免新交锋与旧裁决同号 + 挡旧裁决回流。
+    const events = readTranscript(dir);
+    const lastSeq = events.at(-1)?.seq ?? 0;
+    const maxRound = events.reduce((m, e) => Math.max(m, e.round), 0);
+    topic = transition(
+      { ...topic, currentRound: maxRound, maxRounds: maxRound + addRounds, resumeFromSeq: lastSeq },
+      "active",
+    );
     saveTopic(dir, topic);
     if (ask !== undefined) {
       const from = typeof flags.as === "string" ? flags.as : "user";

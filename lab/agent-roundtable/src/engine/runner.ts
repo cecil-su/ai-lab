@@ -141,7 +141,9 @@ export async function runTopic(dir: string, opts: RunOptions = {}): Promise<Topi
     }
 
     const progress = computeProgress(readTranscript(dir));
-    const startRound = progress.completedRounds + 1;
+    // F9:起始轮取 max(已完成轮, currentRound)+1 —— 续谈重开时 currentRound 已推过裁决轮,
+    // 避免新交锋轮与旧裁决轮同号(否则 checkConverged 可能立即腰斩追问轮)。
+    const startRound = Math.max(progress.completedRounds, topic.currentRound) + 1;
     let converged = false;
 
     outer: for (let round = startRound; round <= topic.maxRounds; round++) {
@@ -156,11 +158,13 @@ export async function runTopic(dir: string, opts: RunOptions = {}): Promise<Topi
 
         const speech = await speakOnce(dir, charter, topic, participant, adapters, round, timeoutMs, emit);
         emit(speech.event);
-        // 成功才更新 sessionRef/tokens;失败(F1)保留旧值,该参与者本轮跳过继续
+        // 成功才更新 sessionRef/tokens;失败(F1/F8)作废该参与者会话 → 下轮全量新会话
         if (!speech.failed) {
           topic = updateParticipant(topic, participant.handle, speech);
-          saveTopic(dir, topic);
+        } else {
+          topic = clearSession(topic, participant.handle);
         }
+        saveTopic(dir, topic);
         if (pauseRequested || endRequested) break outer;
       }
 
@@ -191,6 +195,14 @@ export async function runTopic(dir: string, opts: RunOptions = {}): Promise<Topi
         round: topic.currentRound,
         body: `收尾失败: ${errText(err)}`,
       }));
+      // F10:兜底 summary,避免 completed 却无产物(伪完成)
+      const summaryFile = path.join(dir, "summary.md");
+      if (!fs.existsSync(summaryFile)) {
+        fs.writeFileSync(
+          summaryFile,
+          `# 总结生成失败\n\n> 讨论本身已完成,但收尾/裁决环节失败,未能生成正式总结。\n\n失败原因:${errText(err)}\n`,
+        );
+      }
     }
     topic = transition(topic, "completed");
     saveTopic(dir, topic);
@@ -242,26 +254,28 @@ async function speakOnce(
   const transcript = readTranscript(dir);
   const self = { handle: participant.handle, perspective: resolvePerspectiveText(participant.perspective) };
   const ownSeq = lastOwnSeq(transcript, participant.handle);
+  const trusted = isTrustedRef(participant.sessionRef);
+  // F9:续谈水位线——prompt 事件下界取 max(自身上次发言, resumeFromSeq),挡住旧裁决/旧收尾回流。
+  const floor = topic.resumeFromSeq ?? 0;
   // 增量模式(R4b):会话可信续接且此前发过言 → 只发新增;否则全量。
-  // F4①:仅当 sessionRef 可证为"该参与者自己的线程"才增量;降级哨兵(reasonix @last)
-  // 不可信 → 回退全量并告警,避免串会话时把上下文喂给错误的记忆体。
+  // F4①/F8:仅当 sessionRef 可证为"该参与者自己的线程"才增量;降级哨兵(reasonix @last)不可信 → 回退全量+告警。
   let prompt: string;
-  if (isTrustedRef(participant.sessionRef) && ownSeq > 0) {
+  if (trusted && ownSeq > 0) {
     prompt = buildDeltaPrompt({
       self,
       round,
       maxRounds: topic.maxRounds,
-      newSpeeches: deltaContext(transcript, ownSeq),
+      newSpeeches: deltaContext(transcript, Math.max(ownSeq, floor)),
     });
   } else {
-    if (participant.sessionRef && !isTrustedRef(participant.sessionRef) && ownSeq > 0) {
+    if (participant.sessionRef && !trusted && ownSeq > 0) {
       emit(appendEvent(dir, {
         kind: "system",
         round,
-        body: `⚠ ${participant.handle} 会话降级(${participant.sessionRef}),本轮改发全量以防串会话`,
+        body: `⚠ ${participant.handle} 会话降级(${participant.sessionRef}),本轮改发全量并新建会话以防串会话`,
       }));
     }
-    const ctx = promptContext(transcript, round);
+    const ctx = promptContext(transcript, round, floor);
     prompt = buildPrompt({
       charter,
       self,
@@ -275,16 +289,17 @@ async function speakOnce(
   try {
     result = await adapter.speak({
       prompt,
-      sessionRef: participant.sessionRef ?? undefined,
+      // F8:仅在可信时把旧 ref 交给 adapter 续接;降级 ref 传 undefined → 新会话,不再 -c 续错线程
+      sessionRef: trusted ? (participant.sessionRef ?? undefined) : undefined,
       model: participant.model ?? undefined,
       cwd: topic.repo ?? dir,
       codeAccess: !!topic.repo,
       timeoutMs,
     });
   } catch (err) {
-    // 单点失败降级(F1):记 error 事件,该参与者本轮跳过,讨论继续
+    // 单点失败降级(F1)+ F8:记 error 事件,并作废会话(failed → 调用方清空 sessionRef,下轮全量新会话)
     const event = appendEvent(dir, { kind: "error", round, from: participant.handle, body: errText(err) });
-    return { event, sessionRef: participant.sessionRef ?? "", tokens: participant.tokens, failed: true };
+    return { event, sessionRef: "", tokens: participant.tokens, failed: true };
   }
   const tokens = {
     input: participant.tokens.input + (result.tokens?.input ?? 0),
@@ -308,6 +323,16 @@ function updateParticipant(topic: Topic, handle: string, speech: SpeechResult): 
     ...topic,
     participants: topic.participants.map((p) =>
       p.handle === handle ? { ...p, sessionRef: speech.sessionRef, tokens: speech.tokens } : p,
+    ),
+  };
+}
+
+/** F8:作废某参与者的会话引用(失败/降级后下轮全量新会话);tokens 保留 */
+function clearSession(topic: Topic, handle: string): Topic {
+  return {
+    ...topic,
+    participants: topic.participants.map((p) =>
+      p.handle === handle ? { ...p, sessionRef: null } : p,
     ),
   };
 }

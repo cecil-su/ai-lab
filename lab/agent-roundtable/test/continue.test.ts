@@ -84,6 +84,36 @@ describe("cmdContinue 续谈(R3 方案 B)", () => {
     expect(human?.from).toBe("cecil");
   });
 
+  it("F9:重开 debate 设 resumeFromSeq 水位线,续跑不把旧裁决喂回", async () => {
+    const a = writeScript(root, "f9-a.json", ["A1\n【立场】a1", "A续\n【立场】a2", "A三\n【立场】a3"]);
+    const b = writeScript(root, "f9-b.json", ["B1\n【立场】b1", "B续\n【立场】b2", "B三\n【立场】b3"]);
+    createTopic(root, {
+      id: "f9",
+      title: "重开辩论",
+      mode: "debate",
+      maxRounds: 1,
+      participants: [
+        { handle: "mock-1", provider: a, perspective: "a" },
+        { handle: "mock-2", provider: b, perspective: "b" },
+      ],
+    });
+    const dir = path.join(root, "f9");
+    await runTopic(dir, { installSignalHandlers: false });
+    // 有裁决 verdict
+    const verdictSeq = readTranscript(dir).find((e) => e.kind === "verdict")!.seq;
+
+    await cmdContinue(["f9"], { ask: "再深入" }, { root });
+
+    const topic = loadTopic(dir);
+    // resumeFromSeq 已置为重开时的水位线(>= 裁决 seq)
+    expect(topic.resumeFromSeq).toBeGreaterThanOrEqual(verdictSeq);
+    // 续谈新增事件都在水位线之后;human 追问已注入
+    const after = readTranscript(dir);
+    const human = after.find((e) => e.kind === "human" && e.body === "再深入");
+    expect(human).toBeDefined();
+    expect(human!.seq).toBeGreaterThan(topic.resumeFromSeq!);
+  });
+
   it("F1:--timeout 非法值早退 1(不开题)", async () => {
     const p1 = writeScript(root, "to-a.json", ["x"]);
     const p2 = writeScript(root, "to-b.json", ["y"]);

@@ -28,6 +28,8 @@ export interface Topic {
   participants: Participant[];
   /** 自读(R2):参与者发言时的代码仓库 cwd(绝对路径);缺省 = 话题目录、无代码接触 */
   repo?: string;
+  /** 续谈水位线(F9):重开时置为当时 lastSeq,prompt 事件下界,挡旧裁决/旧收尾回流 */
+  resumeFromSeq?: number;
 }
 
 export interface ParticipantInput {

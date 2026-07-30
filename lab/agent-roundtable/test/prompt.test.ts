@@ -7,6 +7,7 @@ import {
   extractStance,
   isSkip,
   lastOwnSeq,
+  promptContext,
   stanceDigest,
   truncateBody,
 } from "../src/engine/prompt.js";
@@ -134,5 +135,16 @@ describe("increment prompt (R4b)", () => {
   it("clampQuote 超长截断", () => {
     expect(clampQuote("x".repeat(10), 5)).toBe("xxxxx\n…(已截断)");
     expect(clampQuote("短", 5)).toBe("短");
+  });
+
+  it("promptContext 水位线(F9):sinceSeq 以下的事件被排除", () => {
+    const events: TranscriptEvent[] = [
+      { seq: 1, ts: "", round: 3, kind: "verdict", from: "j", body: "旧裁决全文" },
+      { seq: 2, ts: "", round: 4, kind: "message", from: "a", body: "新发言\n【立场】x" },
+    ];
+    // floor=1 → 旧裁决(seq1)被挡,只剩新发言
+    const ctx = promptContext(events, 4, 1);
+    expect(ctx.recent.some((r) => r.body.includes("旧裁决"))).toBe(false);
+    expect(ctx.recent.some((r) => r.body.includes("新发言"))).toBe(true);
   });
 });

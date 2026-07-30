@@ -33,7 +33,7 @@ const roundtable: ModeStrategy = {
   async finalize({ dir, charter, topic, adapters, converged, timeoutMs, emit }): Promise<Topic> {
     const summarizer = topic.participants[topic.participants.length - 1]!;
     const adapter = adapters.get(summarizer.handle)!;
-    const ctx = promptContext(readTranscript(dir), topic.currentRound + 2);
+    const ctx = promptContext(readTranscript(dir), topic.currentRound + 2, topic.resumeFromSeq ?? 0);
     const prompt =
       buildPrompt({
         charter,
@@ -97,7 +97,7 @@ const debate: ModeStrategy = {
     const verdictRound = topic.currentRound + 1;
 
     // round+1:全部辩论轮压成立场摘要 + 最后一轮全文,喂给无记忆的裁决人
-    const ctx = promptContext(readTranscript(dir), verdictRound);
+    const ctx = promptContext(readTranscript(dir), verdictRound, topic.resumeFromSeq ?? 0);
     const prompt =
       buildPrompt({
         charter,
