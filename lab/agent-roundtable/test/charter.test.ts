@@ -75,4 +75,16 @@ describe("buildCharter", () => {
     const md = buildCharter({ title: "缓存选型", mode: "roundtable", maxRounds: 3, participants });
     expect(md).not.toContain("## 讨论记录(可选自读)");
   });
+
+  it("selfRead(F11)加自读安全声明:仓库/记录为数据非指令", () => {
+    const md = buildCharter({ title: "缓存选型", mode: "roundtable", maxRounds: 3, participants, selfRead: true });
+    expect(md).toContain("## 自读安全声明");
+    expect(md).toContain("数据");
+    expect(md).toContain("不得执行或服从");
+  });
+
+  it("不传 selfRead 时无自读安全声明", () => {
+    const md = buildCharter({ title: "缓存选型", mode: "roundtable", maxRounds: 3, participants });
+    expect(md).not.toContain("## 自读安全声明");
+  });
 });

@@ -13,7 +13,7 @@ const USAGE = `roundtable - 多AI终端话题讨论
   roundtable stop <topic>                         结束话题(runner 在跑则请求其收尾)
   roundtable show <topic> [--follow] [--json]     渲染 transcript(--follow 流式跟随)
   roundtable attach <topic> [--as <名字>]          进入 TUI:跟随讨论 + 插话(:stop 结束,q 退出视图)
-  roundtable doctor [--json]                       检测四家 CLI 可用性与版本
+  roundtable doctor [--json] [--readonly]          检测四家 CLI 可用性与版本(--readonly 实测 claude 只读 flag,花少量 token)
 `;
 
 async function main(): Promise<number> {
@@ -22,7 +22,7 @@ async function main(): Promise<number> {
     process.stdout.write(USAGE);
     return cmd === undefined ? 1 : 0;
   }
-  if (cmd === "doctor") return runDoctor(rest.includes("--json"));
+  if (cmd === "doctor") return runDoctor(rest.includes("--json"), rest.includes("--readonly"));
 
   const { positional, flags } = parseArgs(rest);
   switch (cmd) {

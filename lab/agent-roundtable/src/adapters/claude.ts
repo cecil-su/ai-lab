@@ -7,7 +7,8 @@ import type { ProviderAdapter, SpeakResult } from "./types.js";
 //   续接    追加 --resume <session_id>
 //   prompt 经 stdin;输出为单个 JSON 对象:result / session_id / is_error / usage.{input_tokens,...}
 //   自读(R2):codeAccess 时不禁工具,改 plan 模式(只读,禁写)+ 放开 Read/Grep/Glob,
-//             让它在代码仓库 cwd 下自行检索。⚠ 确切 flag 组合待真机冒烟核准并更新此锚点。
+//             让它在代码仓库 cwd 下自行检索。已真机核准(2.1.220,2026-07-30:plan+allowedTools
+//             能读文件、permission_denials 空、无写入);`doctor --readonly` 可复验,防 flag 漂移。
 const BASE_ARGS = ["-p", "--output-format", "json"];
 const DISCUSS_ONLY_ARGS = ["--tools", ""];
 const READONLY_ARGS = ["--permission-mode", "plan", "--allowedTools", "Read", "Grep", "Glob"];

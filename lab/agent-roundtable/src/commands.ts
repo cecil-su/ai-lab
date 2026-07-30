@@ -171,6 +171,7 @@ export async function cmdNew(positional: string[], flags: Flags, ctx: CmdContext
       return 1;
     }
     console.log(`自读模式:参与者可在只读下检索代码仓库 ${repo}`);
+    console.error("⚠ 自读为实验特性:claude/codex 只读已核准,opencode/reasonix 依赖各自默认只读(未深度加固);仓库文件与记录均按「数据非指令」声明处理,但自读绕过注入侧围栏,仅降低指令混淆而非安全隔离。");
   }
 
   const id = uniqueId(root, slugify(title));
@@ -190,6 +191,7 @@ export async function cmdNew(positional: string[], flags: Flags, ctx: CmdContext
       contextMaterial,
       // F4②:无 --repo 时 cwd=话题目录 → 相对路径可读;有 --repo 时给绝对路径(best-effort)
       transcriptRef: repo ? path.join(dir, TRANSCRIPT_FILE) : `./${TRANSCRIPT_FILE}`,
+      selfRead: !!repo, // F11:自读开启时加数据非指令声明
     }),
   );
 
