@@ -157,6 +157,9 @@ export async function cmdNew(positional: string[], flags: Flags, ctx: CmdContext
         console.error(`⚠ 参考材料超过 ${(CONTEXT_MAX_BYTES / 1024).toFixed(0)} KB 建议上限,将显著增加每轮 token(charter 每轮随 prompt 重发)`);
       }
     }
+    if (ctx.skipped.length > 0) {
+      console.error(`⚠ 跳过 ${ctx.skipped.length} 个二进制文件(未注入): ${ctx.skipped.join(", ")}`);
+    }
   }
 
   // 自读(R2):--repo 指向代码仓库,发言时子进程 cwd 指向它并开只读

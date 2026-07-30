@@ -57,7 +57,7 @@ roundtable new "审查本仓库的架构缺陷" --providers claude,codex --repo 
 ```
 
 **接触代码的两条路线**(可叠加):
-- `--context-file` / `--context-dir`(可配 `--context-glob "*.ts"`)**注入**:把文件原样嵌入 charter,**所有参与者(含 claude)**都能读到;材料随 charter 每轮重发,注意 token,>200KB 会告警不阻断。
+- `--context-file` / `--context-dir`(可配 `--context-glob "*.ts"`)**注入**:把文件嵌入 charter,**所有参与者(含 claude)**都能读到;材料随 charter 每轮重发,注意 token,>200KB 会告警不阻断。注入侧有基础防护:材料前置"数据非指令"声明、动态代码围栏防逃逸、二进制文件跳过。
 - `--repo <路径>` **自读**:发言子进程 cwd 指向该仓库并开只读,有文件工具的参与者自己 grep/read;claude 从"禁工具"切到 `--permission-mode plan` 只读工具集。未设时行为不变。
 
 charter 还会附一行**讨论记录自读**提示:完整 `transcript.jsonl` 供有文件工具的参与者**按需**逐字回看全场(注入+增量仍是每轮主通道,常规发言无需读它,不重复烧 token)。
