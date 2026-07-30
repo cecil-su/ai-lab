@@ -14,6 +14,8 @@ export interface Participant {
   model: string | null;
   sessionRef: string | null;
   tokens: { input: number; cached: number; output: number };
+  /** 累计失败次数(A1);>0 时计量为下界(失败调用的 token 无法计入) */
+  failures: number;
 }
 
 export interface Topic {
@@ -74,6 +76,7 @@ export function createTopic(root: string, input: CreateTopicInput): Topic {
       model: p.model ?? null,
       sessionRef: null,
       tokens: { input: 0, cached: 0, output: 0 },
+      failures: 0,
     })),
   };
   writeJsonAtomic(path.join(dir, TOPIC_FILE), topic);
@@ -85,9 +88,10 @@ export function loadTopic(dir: string): Topic {
   if (raw.version !== 1) {
     throw new Error(`unsupported topic.json version: ${String(raw.version)}`);
   }
-  // 旧话题 tokens 缺 cached 字段 → 默认 0(向后兼容读)
+  // 向后兼容读:旧话题缺 tokens.cached / failures → 默认 0
   for (const p of raw.participants) {
     if (p.tokens.cached === undefined) p.tokens = { ...p.tokens, cached: 0 };
+    if (p.failures === undefined) p.failures = 0;
   }
   return raw;
 }

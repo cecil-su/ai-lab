@@ -496,6 +496,39 @@ describe("engine e2e (mock providers)", () => {
     expect(loadTopic(dir).status).toBe("completed");
   });
 
+  it("A1:连续失败达阈值 → 自动 paused + 损失评估事件 + failures 计数", async () => {
+    // 一家总失败、一家每轮变立场成功(避免全体失败收敛/立场收敛),让失败者连败 3 轮
+    const good = writeScript(root, "a1-good.json", [
+      "G1\n【立场】g1", "G2\n【立场】g2", "G3\n【立场】g3", "G4\n【立场】g4",
+    ]);
+    const bad: ProviderAdapter = {
+      name: "always-fail",
+      async detect() { return { ok: true }; },
+      async speak() { throw new Error("总是超时"); },
+    };
+    createTopic(root, {
+      id: "a1-1",
+      title: "连续失败熔断",
+      mode: "roundtable",
+      maxRounds: 10,
+      participants: [
+        { handle: "mock-bad", provider: "mock:placeholder", perspective: "a" },
+        { handle: "mock-good", provider: good, perspective: "b" },
+      ],
+    });
+    const dir = path.join(root, "a1-1");
+    const resolver = (spec: string): ProviderAdapter => (spec === good ? resolveAdapter(good) : bad);
+    const done = await runTopic(dir, { installSignalHandlers: false, resolveAdapter: resolver });
+    // 连续 3 轮失败 → 自动暂停(非 TTY 不提问),远未跑满 maxRounds=10
+    expect(done.status).toBe("paused");
+    expect(done.participants.find((p) => p.handle === "mock-bad")!.failures).toBeGreaterThanOrEqual(3);
+    // 损失评估 system 事件
+    const est = readTranscript(dir).find(
+      (e) => e.kind === "system" && (e.body ?? "").includes("连续") && (e.body ?? "").includes("已消耗 ≥"),
+    );
+    expect(est).toBeDefined();
+  });
+
   it("checkConverged: all-skip round converges immediately", () => {
     const events = readTranscriptFrom([
       { seq: 1, ts: "", kind: "skip", round: 1, from: "a" },

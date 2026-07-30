@@ -120,6 +120,7 @@ describe("computeStatusBar", () => {
           model: null,
           sessionRef: null,
           tokens: { input: 100, cached: 0, output: 40 },
+          failures: 0,
         },
         {
           handle: "b",
@@ -129,6 +130,7 @@ describe("computeStatusBar", () => {
           model: null,
           sessionRef: null,
           tokens: { input: 60, cached: 0, output: 10 },
+          failures: 0,
         },
       ],
       ...over,

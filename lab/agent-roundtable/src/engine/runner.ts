@@ -26,6 +26,8 @@ import {
 
 const CHARTER_FILE = "charter.md";
 const DEFAULT_TIMEOUT_MS = 300_000;
+// A1:某参与者连续失败达此阈值 → 自动暂停(防作废 ref 后无休止全量重发烧钱)
+const FAILURE_CIRCUIT_THRESHOLD = 3;
 
 /** 失败原因转短文本(截断),写入 error 事件 */
 function errText(err: unknown): string {
@@ -107,6 +109,7 @@ export async function runTopic(dir: string, opts: RunOptions = {}): Promise<Topi
 
   let pauseRequested = false;
   let endRequested = false;
+  const consecutiveFail = new Map<string, number>(); // A1:每参与者连续失败计数(transient)
   const requestStop = (): void => {
     pauseRequested = true;
   };
@@ -161,8 +164,23 @@ export async function runTopic(dir: string, opts: RunOptions = {}): Promise<Topi
         // 成功才更新 sessionRef/tokens;失败(F1/F8)作废该参与者会话 → 下轮全量新会话
         if (!speech.failed) {
           topic = updateParticipant(topic, participant.handle, speech);
+          consecutiveFail.set(participant.handle, 0);
         } else {
           topic = clearSession(topic, participant.handle);
+          topic = bumpFailures(topic, participant.handle);
+          const n = (consecutiveFail.get(participant.handle) ?? 0) + 1;
+          consecutiveFail.set(participant.handle, n);
+          // A1:连续失败熔断 → 自动 paused(非 TTY 不提问,防吊死);给一句损失评估(计量为下界)
+          if (n >= FAILURE_CIRCUIT_THRESHOLD) {
+            const p = topic.participants.find((x) => x.handle === participant.handle)!;
+            const spent = p.tokens.input + p.tokens.cached + p.tokens.output;
+            emit(appendEvent(dir, {
+              kind: "system",
+              round,
+              body: `⚠ ${participant.handle} 连续 ${n} 轮失败,已消耗 ≥${spent} token(下界,失败调用未计),再续将继续全量重发。已自动暂停;修复后 continue 可续。`,
+            }));
+            pauseRequested = true;
+          }
         }
         saveTopic(dir, topic);
         if (pauseRequested || endRequested) break outer;
@@ -340,6 +358,16 @@ function clearSession(topic: Topic, handle: string): Topic {
     ...topic,
     participants: topic.participants.map((p) =>
       p.handle === handle ? { ...p, sessionRef: null } : p,
+    ),
+  };
+}
+
+/** A1:累计某参与者失败次数(计量下界依据) */
+function bumpFailures(topic: Topic, handle: string): Topic {
+  return {
+    ...topic,
+    participants: topic.participants.map((p) =>
+      p.handle === handle ? { ...p, failures: p.failures + 1 } : p,
     ),
   };
 }

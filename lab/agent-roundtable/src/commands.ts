@@ -297,7 +297,14 @@ export interface TopicView {
   mode: TopicMode;
   status: Topic["status"];
   round: { current: number; max: number };
-  participants: { handle: string; provider: string; tokens: Participant["tokens"] }[];
+  participants: {
+    handle: string;
+    provider: string;
+    tokens: Participant["tokens"];
+    failures: number;
+    /** A1:failures>0 时计量为下界(失败调用的 token 无法计入) */
+    tokensLowerBound: boolean;
+  }[];
 }
 
 export function listView(topics: Topic[]): TopicView[] {
@@ -311,6 +318,8 @@ export function listView(topics: Topic[]): TopicView[] {
       handle: p.handle,
       provider: providerBase(p.provider),
       tokens: p.tokens,
+      failures: p.failures,
+      tokensLowerBound: p.failures > 0,
     })),
   }));
 }
