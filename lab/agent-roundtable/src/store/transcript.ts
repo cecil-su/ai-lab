@@ -10,7 +10,8 @@ export type EventKind =
   | "human"
   | "verdict"
   | "round_end"
-  | "skip";
+  | "skip"
+  | "error";
 
 export interface TranscriptEvent {
   seq: number;

@@ -72,10 +72,13 @@ describe("topic store", () => {
     topic = transition(topic, "active");
     topic = transition(topic, "completed");
     expect(topic.status).toBe("completed");
-    expect(() => transition(topic, "active")).toThrow(/invalid status transition/);
-    expect(() => transition({ ...topic, status: "active" }, "active")).toThrow(
-      /invalid status transition/,
-    );
+    // F2:completed → active 合法化(续谈重开)
+    expect(transition(topic, "active").status).toBe("active");
+    // F2:幂等——同态重设为 no-op,返回原 topic 不抛
+    expect(transition(topic, "completed")).toBe(topic);
+    expect(transition({ ...topic, status: "active" }, "active").status).toBe("active");
+    // 仍非法的转移照旧抛错
+    expect(() => transition(topic, "paused")).toThrow(/invalid status transition/);
   });
 
   it("listTopics returns topics and ignores stray dirs", () => {

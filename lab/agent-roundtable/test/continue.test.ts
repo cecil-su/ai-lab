@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cmdContinue } from "../src/commands.js";
+import { cmdContinue, cmdNew } from "../src/commands.js";
 import { createTopic, loadTopic } from "../src/store/topic.js";
 import { runTopic } from "../src/engine/runner.js";
 import { readTranscript } from "../src/store/transcript.js";
@@ -82,5 +82,16 @@ describe("cmdContinue 续谈(R3 方案 B)", () => {
     await cmdContinue(["with-as"], { ask: "换个角度", as: "cecil" }, { root });
     const human = readTranscript(dir).find((e) => e.kind === "human");
     expect(human?.from).toBe("cecil");
+  });
+
+  it("F1:--timeout 非法值早退 1(不开题)", async () => {
+    const p1 = writeScript(root, "to-a.json", ["x"]);
+    const p2 = writeScript(root, "to-b.json", ["y"]);
+    const code = await cmdNew(
+      ["超时校验"],
+      { providers: `${p1},${p2}`, timeout: "abc" },
+      { root },
+    );
+    expect(code).toBe(1);
   });
 });

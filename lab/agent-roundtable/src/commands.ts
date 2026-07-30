@@ -63,12 +63,21 @@ function csv(value: string | boolean | undefined): string[] {
   return typeof value === "string" ? value.split(",").map((s) => s.trim()).filter(Boolean) : [];
 }
 
+/** --timeout <秒> → ms;缺省 undefined(用 runner 默认);非法返回 null(调用方报错中止) */
+function parseTimeoutMs(flags: Flags): number | null | undefined {
+  if (flags.timeout === undefined) return undefined;
+  const sec = typeof flags.timeout === "string" ? Number(flags.timeout) : NaN;
+  if (!Number.isInteger(sec) || sec < 1) return null;
+  return sec * 1000;
+}
+
 function printEvent(event: TranscriptEvent): void {
   const round = event.round > 0 ? `[R${event.round}] ` : "";
   if (event.kind === "message") console.log(`${round}${event.from}: ${event.body}`);
   else if (event.kind === "human") console.log(`${round}${event.from}(插话): ${event.body}`);
   else if (event.kind === "skip") console.log(`${round}${event.from}: 【跳过】`);
   else if (event.kind === "verdict") console.log(`${round}${event.from}(裁决): ${event.body}`);
+  else if (event.kind === "error") console.log(`${round}⚠ ${event.from ?? ""} 失败: ${event.body}`);
   else if (event.kind === "round_end") console.log(`${round}—— 本轮结束 ——`);
   else if (event.kind === "system") console.log(`* ${event.body}`);
 }
@@ -81,7 +90,7 @@ export async function cmdNew(positional: string[], flags: Flags, ctx: CmdContext
   const root = ctx.root ?? resolveTopicsRoot();
   const title = positional[0];
   if (!title) {
-    console.error('用法: roundtable new "<话题>" --providers <a,b,...> [--perspectives ...] [--mode roundtable] [--max-rounds 3] [--model ...] [--context-file a,b] [--context-dir <dir> [--context-glob "*.ts"]] [--repo <代码仓库>]');
+    console.error('用法: roundtable new "<话题>" --providers <a,b,...> [--perspectives ...] [--mode roundtable] [--max-rounds 3] [--model ...] [--context-file a,b] [--context-dir <dir> [--context-glob "*.ts"]] [--repo <代码仓库>] [--timeout <秒>]');
     return 1;
   }
   const specs = csv(flags.providers);
@@ -100,6 +109,11 @@ export async function cmdNew(positional: string[], flags: Flags, ctx: CmdContext
     return 1;
   }
   const model = typeof flags.model === "string" ? flags.model : undefined;
+  const timeoutMs = parseTimeoutMs(flags);
+  if (timeoutMs === null) {
+    console.error(`--timeout 需为正整数秒,收到: ${String(flags.timeout)}`);
+    return 1;
+  }
   const perspectives = csv(flags.perspectives);
   const templateIds = Object.keys(PERSPECTIVE_TEMPLATES);
 
@@ -176,7 +190,7 @@ export async function cmdNew(positional: string[], flags: Flags, ctx: CmdContext
 
   console.log(`已开题: ${id}(${participants.length} 位参与者,${mode},最多 ${maxRounds} 轮)`);
   console.log("前台运行中,Ctrl+C 可在当前发言完成后优雅暂停\n");
-  const final = await runTopic(dir, { onEvent: (e) => printEvent(e) });
+  const final = await runTopic(dir, { onEvent: (e) => printEvent(e), ...(timeoutMs ? { timeoutMs } : {}) });
   console.log(`\n话题状态: ${final.status}`);
   return 0;
 }
@@ -185,12 +199,17 @@ export async function cmdContinue(positional: string[], flags: Flags, ctx: CmdCo
   const root = ctx.root ?? resolveTopicsRoot();
   const id = positional[0];
   if (!id) {
-    console.error('用法: roundtable continue <topic> [--ask "<追问>"] [--more <n>] [--as <名字>]');
+    console.error('用法: roundtable continue <topic> [--ask "<追问>"] [--more <n>] [--as <名字>] [--timeout <秒>]');
     return 1;
   }
   const dir = topicDir(root, id);
   if (!fs.existsSync(path.join(dir, "topic.json"))) {
     console.error(`话题不存在: ${id}`);
+    return 1;
+  }
+  const timeoutMs = parseTimeoutMs(flags);
+  if (timeoutMs === null) {
+    console.error(`--timeout 需为正整数秒,收到: ${String(flags.timeout)}`);
     return 1;
   }
   let topic = loadTopic(dir);
@@ -210,7 +229,7 @@ export async function cmdContinue(positional: string[], flags: Flags, ctx: CmdCo
       console.error(`--more 需为正整数,收到: ${String(flags.more)}`);
       return 1;
     }
-    topic = { ...topic, status: "active", maxRounds: topic.maxRounds + addRounds };
+    topic = transition({ ...topic, maxRounds: topic.maxRounds + addRounds }, "active");
     saveTopic(dir, topic);
     if (ask !== undefined) {
       const from = typeof flags.as === "string" ? flags.as : "user";
@@ -222,7 +241,7 @@ export async function cmdContinue(positional: string[], flags: Flags, ctx: CmdCo
   } else {
     console.log(`继续话题: ${id}(已完成 ${topic.currentRound}/${topic.maxRounds} 轮)\n`);
   }
-  const final = await runTopic(dir, { onEvent: (e) => printEvent(e) });
+  const final = await runTopic(dir, { onEvent: (e) => printEvent(e), ...(timeoutMs ? { timeoutMs } : {}) });
   console.log(`\n话题状态: ${final.status}`);
   return 0;
 }

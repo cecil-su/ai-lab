@@ -97,10 +97,11 @@ export function saveTopic(dir: string, topic: Topic): void {
 const TRANSITIONS: Record<TopicStatus, TopicStatus[]> = {
   active: ["paused", "completed"],
   paused: ["active", "completed"],
-  completed: [],
+  completed: ["active"], // 续谈重开(F2):completed → active 合法化
 };
 
 export function transition(topic: Topic, next: TopicStatus): Topic {
+  if (next === topic.status) return topic; // 幂等:同态重设为 no-op
   if (!TRANSITIONS[topic.status].includes(next)) {
     throw new Error(`invalid status transition: ${topic.status} -> ${next}`);
   }

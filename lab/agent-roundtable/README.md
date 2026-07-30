@@ -62,6 +62,8 @@ roundtable new "审查本仓库的架构缺陷" --providers claude,codex --repo 
 
 开题时在话题目录写入 `charter.md`(议题、参与者与视角、模式规则、停止条件),随后前台驱动回合。**Ctrl+C** 在当前发言完成后优雅暂停并落盘。
 
+`--timeout <秒>` 调每次发言的子进程超时(默认 300)。**单个 provider 失败/超时不会炸掉整场**:该参与者本轮记一条 `⚠ 失败` 事件后跳过,讨论继续,收尾正常落 `completed`。
+
 ### list — 列出全部话题
 
 ```bash

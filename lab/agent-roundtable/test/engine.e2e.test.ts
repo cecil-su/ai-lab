@@ -330,6 +330,82 @@ describe("engine e2e (mock providers)", () => {
     expect(calls[0]!.codeAccess).toBe(false);
   });
 
+  it("F1:单 provider 抛错记 error 事件、该参与者跳过、其余照跑、收尾 completed", async () => {
+    const good = writeScript(root, "f1-good.json", ["正常发言\n【立场】ok", "总结"]);
+    const bad = writeScript(root, "f1-bad.json", ["never used"]);
+    createTopic(root, {
+      id: "f1-1",
+      title: "单点失败",
+      mode: "roundtable",
+      maxRounds: 1,
+      participants: [
+        { handle: "mock-bad", provider: bad, perspective: "a" },
+        { handle: "mock-good", provider: good, perspective: "b" },
+      ],
+    });
+    const dir = path.join(root, "f1-1");
+    // mock-bad 的 speak 抛错(模拟超时/崩溃)
+    const resolver = (spec: string): ProviderAdapter => {
+      const inner = resolveAdapter(spec);
+      if (spec === bad) return { ...inner, async speak() { throw new Error("boom 超时(2ms)"); } };
+      return inner;
+    };
+    const done = await runTopic(dir, { installSignalHandlers: false, resolveAdapter: resolver });
+
+    expect(done.status).toBe("completed");
+    const events = readTranscript(dir);
+    const err = events.find((e) => e.kind === "error" && e.from === "mock-bad");
+    expect(err?.body).toContain("boom");
+    // mock-good 正常发言
+    expect(events.find((e) => e.kind === "message" && e.from === "mock-good")).toBeDefined();
+    // 失败者 sessionRef/tokens 未被更新
+    expect(done.participants.find((p) => p.handle === "mock-bad")!.sessionRef).toBeNull();
+    // seq 连续无洞
+    expect(events.map((e) => e.seq)).toEqual(events.map((_, i) => i + 1));
+  });
+
+  it("F1:全体失败轮提前收敛,仍落 completed", async () => {
+    const bad = writeScript(root, "f1-allbad.json", ["x"]);
+    createTopic(root, {
+      id: "f1-2",
+      title: "全体失败",
+      mode: "roundtable",
+      maxRounds: 3,
+      participants: [{ handle: "mock-1", provider: bad, perspective: "a" }],
+    });
+    const dir = path.join(root, "f1-2");
+    const resolver = (spec: string): ProviderAdapter => ({
+      ...resolveAdapter(spec),
+      async speak() { throw new Error("全挂"); },
+    });
+    const done = await runTopic(dir, { installSignalHandlers: false, resolveAdapter: resolver });
+    expect(done.status).toBe("completed");
+    expect(done.currentRound).toBe(1); // 全员失败 → 首轮即收敛,不空转到 maxRounds
+  });
+
+  it("F1:finalize 失败也落 completed 并记 error 事件", async () => {
+    const bad = writeScript(root, "f1-fin.json", ["会崩"]);
+    createTopic(root, {
+      id: "f1-3",
+      title: "收尾失败",
+      mode: "debate",
+      maxRounds: 1,
+      participants: [
+        { handle: "mock-1", provider: bad, perspective: "a" },
+        { handle: "mock-2", provider: bad, perspective: "b" },
+      ],
+    });
+    const dir = path.join(root, "f1-3");
+    // 全程抛错:交锋轮各记 error,裁决(finalize)也抛 → 被兜底
+    const resolver = (spec: string): ProviderAdapter => ({
+      ...resolveAdapter(spec),
+      async speak() { throw new Error("provider 挂了"); },
+    });
+    const done = await runTopic(dir, { installSignalHandlers: false, resolveAdapter: resolver });
+    expect(done.status).toBe("completed");
+    expect(readTranscript(dir).some((e) => e.kind === "error")).toBe(true);
+  });
+
   it("checkConverged: all-skip round converges immediately", () => {
     const events = readTranscriptFrom([
       { seq: 1, ts: "", kind: "skip", round: 1, from: "a" },

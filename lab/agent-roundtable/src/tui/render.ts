@@ -51,6 +51,8 @@ export function renderEvent(event: TranscriptEvent, colorOf: (handle?: string) =
       return { key, text: `${r}${event.from}: 【跳过】`, dim: true };
     case "verdict":
       return { key, text: `${r}${event.from}(裁决): ${event.body ?? ""}`, color: "cyanBright", bold: true };
+    case "error":
+      return { key, text: `${r}⚠ ${event.from ?? ""} 失败: ${event.body ?? ""}`, color: "red" };
     case "round_end":
       return { key, text: `${r}—— 本轮结束 ——`, dim: true };
   }

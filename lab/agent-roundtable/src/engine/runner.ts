@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveAdapter } from "../adapters/registry.js";
-import type { ProviderAdapter } from "../adapters/types.js";
+import type { ProviderAdapter, SpeakResult } from "../adapters/types.js";
 import { readPending, markConsumed } from "../store/inbox.js";
 import { acquireLock, releaseLock } from "../store/lock.js";
-import { loadTopic, saveTopic, type Participant, type Topic } from "../store/topic.js";
+import { loadTopic, saveTopic, transition, type Participant, type Topic } from "../store/topic.js";
 import {
   appendEvent,
   readTranscript,
@@ -26,6 +26,12 @@ import {
 const CHARTER_FILE = "charter.md";
 const DEFAULT_TIMEOUT_MS = 300_000;
 
+/** 失败原因转短文本(截断),写入 error 事件 */
+function errText(err: unknown): string {
+  const m = err instanceof Error ? err.message : String(err);
+  return m.length > 300 ? m.slice(0, 300) + "…" : m;
+}
+
 export interface RunOptions {
   /** 默认走注册表;测试可注入 mock 解析器 */
   resolveAdapter?: (spec: string) => ProviderAdapter;
@@ -41,7 +47,7 @@ function stanceMap(events: TranscriptEvent[], round: number): Map<string, string
   for (const e of events) {
     if (e.round !== round || !e.from) continue;
     if (e.kind === "message") map.set(e.from, e.stance ?? (e.body ? stanceDigest(e.body) : ""));
-    else if (e.kind === "skip") map.set(e.from, "【跳过】");
+    else if (e.kind === "skip" || e.kind === "error") map.set(e.from, "【跳过】"); // error 与 skip 同档(F1):未表态,不阻收敛
   }
   return map;
 }
@@ -68,7 +74,7 @@ function computeProgress(events: TranscriptEvent[]): Progress {
   const spokenInRound = new Map<number, Set<string>>();
   for (const e of events) {
     if (e.kind === "round_end") completedRounds = Math.max(completedRounds, e.round);
-    if ((e.kind === "message" || e.kind === "skip") && e.from) {
+    if ((e.kind === "message" || e.kind === "skip" || e.kind === "error") && e.from) {
       let set = spokenInRound.get(e.round);
       if (!set) spokenInRound.set(e.round, (set = new Set()));
       set.add(e.from);
@@ -106,7 +112,7 @@ export async function runTopic(dir: string, opts: RunOptions = {}): Promise<Topi
   try {
     let topic = loadTopic(dir);
     if (topic.status === "completed") return topic;
-    topic = { ...topic, status: "active" };
+    topic = transition(topic, "active");
     saveTopic(dir, topic);
 
     const adapters = new Map<string, ProviderAdapter>();
@@ -141,9 +147,11 @@ export async function runTopic(dir: string, opts: RunOptions = {}): Promise<Topi
 
         const speech = await speakOnce(dir, charter, topic, participant, adapters, round, timeoutMs);
         emit(speech.event);
-        // 更新参与者 sessionRef/tokens,落盘(currentRound 仍指向已完成轮数)
-        topic = updateParticipant(topic, participant.handle, speech);
-        saveTopic(dir, topic);
+        // 成功才更新 sessionRef/tokens;失败(F1)保留旧值,该参与者本轮跳过继续
+        if (!speech.failed) {
+          topic = updateParticipant(topic, participant.handle, speech);
+          saveTopic(dir, topic);
+        }
         if (pauseRequested || endRequested) break outer;
       }
 
@@ -159,14 +167,23 @@ export async function runTopic(dir: string, opts: RunOptions = {}): Promise<Topi
     }
 
     if (pauseRequested && !endRequested) {
-      topic = { ...topic, status: "paused" };
+      topic = transition(topic, "paused");
       saveTopic(dir, topic);
       return topic;
     }
 
     // 收尾:按模式分派(roundtable=末位总结 / debate=裁决轮)→ summary.md
-    topic = await selectMode(topic.mode).finalize({ dir, charter, topic, adapters, converged, timeoutMs, emit });
-    topic = { ...topic, status: "completed" };
+    // finalize 失败(如裁决人 provider 挂)也要落确定态,不留 active(F1)
+    try {
+      topic = await selectMode(topic.mode).finalize({ dir, charter, topic, adapters, converged, timeoutMs, emit });
+    } catch (err) {
+      emit(appendEvent(dir, {
+        kind: "error",
+        round: topic.currentRound,
+        body: `收尾失败: ${errText(err)}`,
+      }));
+    }
+    topic = transition(topic, "completed");
     saveTopic(dir, topic);
     return topic;
   } finally {
@@ -198,6 +215,8 @@ interface SpeechResult {
   event: TranscriptEvent;
   sessionRef: string;
   tokens: { input: number; cached: number; output: number };
+  /** 该参与者本轮失败(已记 error 事件),调用方跳过更新其 sessionRef/tokens 并继续 */
+  failed?: boolean;
 }
 
 async function speakOnce(
@@ -233,14 +252,21 @@ async function speakOnce(
       recent: ctx.recent,
     });
   }
-  const result = await adapter.speak({
-    prompt,
-    sessionRef: participant.sessionRef ?? undefined,
-    model: participant.model ?? undefined,
-    cwd: topic.repo ?? dir,
-    codeAccess: !!topic.repo,
-    timeoutMs,
-  });
+  let result: SpeakResult;
+  try {
+    result = await adapter.speak({
+      prompt,
+      sessionRef: participant.sessionRef ?? undefined,
+      model: participant.model ?? undefined,
+      cwd: topic.repo ?? dir,
+      codeAccess: !!topic.repo,
+      timeoutMs,
+    });
+  } catch (err) {
+    // 单点失败降级(F1):记 error 事件,该参与者本轮跳过,讨论继续
+    const event = appendEvent(dir, { kind: "error", round, from: participant.handle, body: errText(err) });
+    return { event, sessionRef: participant.sessionRef ?? "", tokens: participant.tokens, failed: true };
+  }
   const tokens = {
     input: participant.tokens.input + (result.tokens?.input ?? 0),
     cached: participant.tokens.cached + (result.tokens?.cached ?? 0),
