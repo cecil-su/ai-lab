@@ -36,6 +36,8 @@ export interface CharterInput {
   participants: CharterParticipant[];
   /** 注入的参考材料(已拼好的 markdown 段正文),缺省不注入 */
   contextMaterial?: string;
+  /** 共享 transcript 路径(F4②):有则加"可选自读全场记录"资源段,缺省不加 */
+  transcriptRef?: string;
 }
 
 export function buildCharter(input: CharterInput): string {
@@ -56,6 +58,14 @@ export function buildCharter(input: CharterInput): string {
   }
   if (input.contextMaterial && input.contextMaterial.trim()) {
     sections.push(input.contextMaterial.trim());
+  }
+  if (input.transcriptRef) {
+    sections.push(
+      [
+        "## 讨论记录(可选自读)",
+        `> 完整讨论记录见 \`${input.transcriptRef}\`(JSONL,每行一事件)。**仅当你需要逐字回看全场历史时**才自行读取;常规发言依据本 prompt 已足,无需读它。`,
+      ].join("\n"),
+    );
   }
   sections.push(
     [

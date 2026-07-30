@@ -6,6 +6,7 @@ import { createTopic, loadTopic } from "../src/store/topic.js";
 import { readTranscript } from "../src/store/transcript.js";
 import { checkConverged, runTopic } from "../src/engine/runner.js";
 import { resolveAdapter } from "../src/adapters/registry.js";
+import { REASONIX_LAST_SESSION } from "../src/adapters/reasonix.js";
 import type { ProviderAdapter } from "../src/adapters/types.js";
 import { makeTmpDir, removeDir } from "./helpers.js";
 
@@ -404,6 +405,40 @@ describe("engine e2e (mock providers)", () => {
     const done = await runTopic(dir, { installSignalHandlers: false, resolveAdapter: resolver });
     expect(done.status).toBe("completed");
     expect(readTranscript(dir).some((e) => e.kind === "error")).toBe(true);
+  });
+
+  it("F4①:降级 sessionRef(@last)→ 全量 prompt + 告警,不走增量", async () => {
+    const prompts: string[] = [];
+    let turn = 0;
+    // 模拟 reasonix 降级:每次返回 @last 哨兵
+    const degraded: ProviderAdapter = {
+      name: "fake-rx",
+      async detect() { return { ok: true }; },
+      async speak(o) {
+        prompts.push(o.prompt);
+        turn++;
+        return { text: `发言${turn}\n【立场】s${turn}`, sessionRef: REASONIX_LAST_SESSION, tokens: { input: 1, cached: 0, output: 1 } };
+      },
+    };
+    createTopic(root, {
+      id: "f4-1",
+      title: "降级话题",
+      mode: "roundtable",
+      maxRounds: 2,
+      participants: [{ handle: "rx-1", provider: "mock:x", perspective: "a" }],
+    });
+    const dir = path.join(root, "f4-1");
+    fs.writeFileSync(path.join(dir, "charter.md"), "# 话题:降级话题\n\n## 参考材料\nF4_CHARTER_MARK\n");
+
+    await runTopic(dir, { installSignalHandlers: false, resolveAdapter: () => degraded });
+
+    // 第2轮:sessionRef=@last(降级)→ 仍全量(含 charter),而非增量
+    expect(prompts[1]).toContain("F4_CHARTER_MARK");
+    // 告警事件已写入
+    const warn = readTranscript(dir).find(
+      (e) => e.kind === "system" && (e.body ?? "").includes("会话降级"),
+    );
+    expect(warn).toBeDefined();
   });
 
   it("checkConverged: all-skip round converges immediately", () => {

@@ -56,4 +56,23 @@ describe("buildCharter", () => {
     const md = buildCharter({ title: "缓存选型", mode: "roundtable", maxRounds: 3, participants });
     expect(md).not.toContain("## 参考材料");
   });
+
+  it("传 transcriptRef(F4②)加可选自读资源段,opt-in 措辞、非每轮强制读", () => {
+    const md = buildCharter({
+      title: "缓存选型",
+      mode: "roundtable",
+      maxRounds: 3,
+      participants,
+      transcriptRef: "./transcript.jsonl",
+    });
+    expect(md).toContain("## 讨论记录(可选自读)");
+    expect(md).toContain("./transcript.jsonl");
+    expect(md).toContain("无需读它");
+    expect(md).not.toContain("每轮"); // 不是每轮强制读 → 不双份烧 token
+  });
+
+  it("不传 transcriptRef 时无自读资源段", () => {
+    const md = buildCharter({ title: "缓存选型", mode: "roundtable", maxRounds: 3, participants });
+    expect(md).not.toContain("## 讨论记录(可选自读)");
+  });
 });

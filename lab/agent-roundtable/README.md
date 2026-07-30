@@ -60,6 +60,8 @@ roundtable new "审查本仓库的架构缺陷" --providers claude,codex --repo 
 - `--context-file` / `--context-dir`(可配 `--context-glob "*.ts"`)**注入**:把文件原样嵌入 charter,**所有参与者(含 claude)**都能读到;材料随 charter 每轮重发,注意 token,>200KB 会告警不阻断。
 - `--repo <路径>` **自读**:发言子进程 cwd 指向该仓库并开只读,有文件工具的参与者自己 grep/read;claude 从"禁工具"切到 `--permission-mode plan` 只读工具集。未设时行为不变。
 
+charter 还会附一行**讨论记录自读**提示:完整 `transcript.jsonl` 供有文件工具的参与者**按需**逐字回看全场(注入+增量仍是每轮主通道,常规发言无需读它,不重复烧 token)。
+
 开题时在话题目录写入 `charter.md`(议题、参与者与视角、模式规则、停止条件),随后前台驱动回合。**Ctrl+C** 在当前发言完成后优雅暂停并落盘。
 
 `--timeout <秒>` 调每次发言的子进程超时(默认 300)。**单个 provider 失败/超时不会炸掉整场**:该参与者本轮记一条 `⚠ 失败` 事件后跳过,讨论继续,收尾正常落 `completed`。

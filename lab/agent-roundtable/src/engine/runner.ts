@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveAdapter } from "../adapters/registry.js";
+import { REASONIX_LAST_SESSION } from "../adapters/reasonix.js";
 import type { ProviderAdapter, SpeakResult } from "../adapters/types.js";
 import { readPending, markConsumed } from "../store/inbox.js";
 import { acquireLock, releaseLock } from "../store/lock.js";
@@ -30,6 +31,14 @@ const DEFAULT_TIMEOUT_MS = 300_000;
 function errText(err: unknown): string {
   const m = err instanceof Error ? err.message : String(err);
   return m.length > 300 ? m.slice(0, 300) + "…" : m;
+}
+
+// 降级/不可信 sessionRef 哨兵集合:这些无法唯一定位"该参与者自己的线程",不得走增量(F4①)
+const DEGRADED_REFS = new Set<string>([REASONIX_LAST_SESSION]);
+
+/** sessionRef 是否可信到能安全走增量:非空且非降级哨兵 */
+function isTrustedRef(ref: string | null | undefined): boolean {
+  return !!ref && !DEGRADED_REFS.has(ref);
 }
 
 export interface RunOptions {
@@ -145,7 +154,7 @@ export async function runTopic(dir: string, opts: RunOptions = {}): Promise<Topi
         if (pauseRequested || endRequested) break outer;
         if (already.has(participant.handle)) continue;
 
-        const speech = await speakOnce(dir, charter, topic, participant, adapters, round, timeoutMs);
+        const speech = await speakOnce(dir, charter, topic, participant, adapters, round, timeoutMs, emit);
         emit(speech.event);
         // 成功才更新 sessionRef/tokens;失败(F1)保留旧值,该参与者本轮跳过继续
         if (!speech.failed) {
@@ -227,14 +236,17 @@ async function speakOnce(
   adapters: Map<string, ProviderAdapter>,
   round: number,
   timeoutMs: number,
+  emit: (e: TranscriptEvent) => void,
 ): Promise<SpeechResult> {
   const adapter = adapters.get(participant.handle)!;
   const transcript = readTranscript(dir);
   const self = { handle: participant.handle, perspective: resolvePerspectiveText(participant.perspective) };
   const ownSeq = lastOwnSeq(transcript, participant.handle);
-  // 增量模式(R4b):会话已续接且此前发过言 → 只发新增,不重发 charter/历史;否则全量
+  // 增量模式(R4b):会话可信续接且此前发过言 → 只发新增;否则全量。
+  // F4①:仅当 sessionRef 可证为"该参与者自己的线程"才增量;降级哨兵(reasonix @last)
+  // 不可信 → 回退全量并告警,避免串会话时把上下文喂给错误的记忆体。
   let prompt: string;
-  if (participant.sessionRef && ownSeq > 0) {
+  if (isTrustedRef(participant.sessionRef) && ownSeq > 0) {
     prompt = buildDeltaPrompt({
       self,
       round,
@@ -242,6 +254,13 @@ async function speakOnce(
       newSpeeches: deltaContext(transcript, ownSeq),
     });
   } else {
+    if (participant.sessionRef && !isTrustedRef(participant.sessionRef) && ownSeq > 0) {
+      emit(appendEvent(dir, {
+        kind: "system",
+        round,
+        body: `⚠ ${participant.handle} 会话降级(${participant.sessionRef}),本轮改发全量以防串会话`,
+      }));
+    }
     const ctx = promptContext(transcript, round);
     prompt = buildPrompt({
       charter,

@@ -17,7 +17,7 @@ import {
   type Topic,
   type TopicMode,
 } from "./store/topic.js";
-import { readTranscript, watchTranscript, type TranscriptEvent } from "./store/transcript.js";
+import { readTranscript, watchTranscript, TRANSCRIPT_FILE, type TranscriptEvent } from "./store/transcript.js";
 
 export type Flags = Record<string, string | boolean>;
 
@@ -185,6 +185,8 @@ export async function cmdNew(positional: string[], flags: Flags, ctx: CmdContext
         perspective: p.perspective,
       })),
       contextMaterial,
+      // F4②:无 --repo 时 cwd=话题目录 → 相对路径可读;有 --repo 时给绝对路径(best-effort)
+      transcriptRef: repo ? path.join(dir, TRANSCRIPT_FILE) : `./${TRANSCRIPT_FILE}`,
     }),
   );
 
