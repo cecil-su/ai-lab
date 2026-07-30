@@ -52,6 +52,11 @@ export function execProvider(opts: {
 
     child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
     child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
+    // stdio 流级 'error'(如 Windows spawn 时 socket read ENOTCONN)必须监听,
+    // 否则会作为 unhandled 'error' 事件炸掉整个进程、绕过上层 F1 的 try/catch。
+    // stdout 是必要输出,其流错误按启动失败处理;stderr/stdin 非关键,吞掉。
+    child.stdout.on("error", (err) => fail(new ProviderExecError(opts.provider, `stdout 流错误: ${err.message}`, { stderr })));
+    child.stderr.on("error", () => {});
     // 子进程提前退出时 stdin 写入会 EPIPE,吞掉即可
     child.stdin.on("error", () => {});
     if (opts.stdin !== undefined) child.stdin.write(opts.stdin, "utf8");
