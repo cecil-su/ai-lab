@@ -133,6 +133,17 @@ function reconcileTopic(topic: Topic, events: TranscriptEvent[]): { topic: Topic
 }
 
 /**
+ * 预算暂停信号(方案 A,4 模型裁决):额度不足时由 speak 预留器抛出。
+ * 与 provider 失败正交:不得计 failures、不清 sessionRef、不记 error 事件。
+ */
+export class BudgetExhaustedError extends Error {
+  constructor(readonly used: number, readonly max: number | undefined) {
+    super(`调用额度已用尽(${used}/${max ?? "∞"})`);
+    this.name = "BudgetExhaustedError";
+  }
+}
+
+/**
  * 前台回合循环。持有 runner.lock,单写者 append transcript。
  * 开题(transcript 为空)先补 seq-1 system 事件(design §2 契约);continue 不重复写。
  * 暂停(SIGINT/requestStop):当前发言完成后落盘 status=paused、清锁、优雅退出。
@@ -174,8 +185,9 @@ export async function runTopic(dir: string, opts: RunOptions = {}): Promise<Topi
     const adapters = new Map<string, ProviderAdapter>();
     for (const p of topic.participants) adapters.set(p.handle, resolve(p.provider));
 
-    // 预算闭环:包装所有 speak(含 finalize/恢复重跑)累计调用次数,
-    // 跨 continue 持久化;预算用尽只允许在轮次边界取消(不打断在途调用),落盘可续。
+    // 预算闭环(方案 A,4 模型裁决):调用前持久化预留 —— 每次 speak 先检查并原子落盘 calls+1,
+    // 再启动子进程;崩溃保守多扣、绝不回退。额度不足抛 BudgetExhaustedError(与失败正交)。
+    // 只承诺上界(calls ≤ maxCalls),不承诺利用率。
     let calls = topic.calls ?? 0;
     const budgetExhausted = (): boolean => (topic.maxCalls ?? Number.POSITIVE_INFINITY) <= calls;
     // 预算用尽 → 按暂停路径落盘(可续),不进入收尾/不标 completed
@@ -185,16 +197,20 @@ export async function runTopic(dir: string, opts: RunOptions = {}): Promise<Topi
       emit(appendEvent(dir, {
         kind: "system",
         round: topic.currentRound,
-        body: `⚠ 预算用尽:已达 ${calls}/${topic.maxCalls} 次调用上限,已在轮次边界暂停。` +
+        body: `⚠ 调用额度已用尽:已预留 ${calls}/${topic.maxCalls} 次,已在调用边界暂停(可续)。` +
           `可用 continue --max-calls <更大值> 续跑;失败调用的 token 以下界计,不可预测。`,
       }));
     };
-    const countingAdapters = new Map<string, ProviderAdapter>();
+    const spendingAdapters = new Map<string, ProviderAdapter>();
     for (const [handle, adapter] of adapters) {
-      countingAdapters.set(handle, {
+      spendingAdapters.set(handle, {
         ...adapter,
         async speak(o) {
+          // 预留制:先检查+落盘占用,再启动子进程;崩溃窗口落在"已预留"一侧 → 保守多扣,不回退
+          if (budgetExhausted()) throw new BudgetExhaustedError(calls, topic.maxCalls);
           calls += 1;
+          topic = { ...topic, calls };
+          saveTopic(dir, topic); // 原子落盘预留
           return adapter.speak(o);
         },
       });
@@ -240,7 +256,7 @@ export async function runTopic(dir: string, opts: RunOptions = {}): Promise<Topi
         }
         if (already.has(participant.handle)) continue;
 
-        const speech = await speakOnce(dir, charter, topic, participant, countingAdapters, round, timeoutMs, emit);
+        const speech = await speakOnce(dir, charter, topic, participant, spendingAdapters, round, timeoutMs, emit);
         emit(speech.event);
         // 成功才更新 sessionRef/tokens;失败(F1/F8)作废该参与者会话 → 下轮全量新会话
         if (!speech.failed) {
@@ -323,8 +339,16 @@ export async function runTopic(dir: string, opts: RunOptions = {}): Promise<Topi
     // finalize 失败(如裁决人 provider 挂)也要落确定态,不留 active(F1)
     let failedFinalize = false;
     try {
-      topic = await selectMode(topic.mode).finalize({ dir, charter, topic, adapters: countingAdapters, converged, timeoutMs, emit });
+      topic = await selectMode(topic.mode).finalize({ dir, charter, topic, adapters: spendingAdapters, converged, timeoutMs, emit });
     } catch (err) {
+      // 收尾额度不足(方案 A):可恢复预算暂停,不写兜底 summary、不标 failed——
+      // 保持 finalization.pending,恢复时按代际幂等续跑(已有 verdict 复用)。
+      if (err instanceof BudgetExhaustedError) {
+        budgetStop();
+        topic = persistBudget(transition(topic, "paused"));
+        saveTopic(dir, topic);
+        return topic;
+      }
       emit(appendEvent(dir, {
         kind: "error",
         round: topic.currentRound,
@@ -455,6 +479,8 @@ async function speakOnce(
       timeoutMs,
     });
   } catch (err) {
+    // 预算暂停信号与失败正交:不记 error、不计 failures、不清会话,原样上抛由 runner 处理
+    if (err instanceof BudgetExhaustedError) throw err;
     // 单点失败降级(F1)+ F8:记 error 事件,并作废会话(failed → 调用方清空 sessionRef,下轮全量新会话)
     // Phase-3 ①:error 带 commit(sessionRef:null,tokens 累计不变),使崩溃后重建能还原"会话已作废"。
     const event = appendEvent(dir, {

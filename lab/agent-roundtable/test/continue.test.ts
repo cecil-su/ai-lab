@@ -5,7 +5,7 @@ import { makeVerified, type ProviderAdapter, type SessionRef } from "../src/adap
 import { resolveAdapter } from "../src/adapters/registry.js";
 import { cmdContinue, cmdNew, cmdStop } from "../src/commands.js";
 import { createTopic, loadTopic, saveTopic } from "../src/store/topic.js";
-import { runTopic } from "../src/engine/runner.js";
+import { BudgetExhaustedError, runTopic } from "../src/engine/runner.js";
 import { readTranscript, TRANSCRIPT_FILE } from "../src/store/transcript.js";
 import { makeTmpDir, removeDir } from "./helpers.js";
 
@@ -239,7 +239,7 @@ describe("cmdContinue 续谈(R3 方案 B)", () => {
     expect(paused.status).toBe("paused");
     expect(paused.calls).toBe(3);
     expect(paused.maxCalls).toBe(3);
-    expect(readTranscript(dir).some((e) => e.kind === "system" && e.body?.includes("预算用尽"))).toBe(true);
+    expect(readTranscript(dir).some((e) => e.kind === "system" && e.body?.includes("额度已用尽"))).toBe(true);
 
     // 预算已尽且未提高 → 拒绝
     const rejectCode = await cmdContinue(["2026-07-31-预算暂停"], { ask: "继续" }, { root });
@@ -271,6 +271,73 @@ describe("cmdContinue 续谈(R3 方案 B)", () => {
     const done = loadTopic(path.join(root, "2026-07-31-预算刚好"));
     expect(done.status).toBe("completed");
     expect(done.calls).toBe(3); // 2 发言 + 1 收尾
+  });
+
+  it("预算暂停与失败正交:不 bump failures、不清 ref、不记 error (方案A门槛)", async () => {
+    const p1 = writeScript(root, "orth-a.json", ["观点A\n【立场】A", "续A\n【立场】A2", "总结A"]);
+    const p2 = writeScript(root, "orth-b.json", ["观点B\n【立场】B", "续B\n【立场】B2", "总结B"]);
+    // 第 1 轮 2 次预留 + 第 2 轮 mock-1 预留(第 3 次)后耗尽 → mock-2 发言前暂停
+    await cmdNew(
+      ["预算正交"],
+      { providers: `${p1},${p2}`, "max-rounds": "2", "max-calls": "3" },
+      { root },
+    );
+    const dir = path.join(root, "2026-07-31-预算正交");
+    const t = loadTopic(dir);
+    expect(t.status).toBe("paused");
+    expect(t.calls).toBe(3);
+    expect(t.calls).toBeLessThanOrEqual(t.maxCalls!); // 上界断言
+    // 正交:mock-2 未被计失败、会话保留、无 error 事件
+    const p2p = t.participants.find((p) => p.handle === "mock-2")!;
+    expect(p2p.failures).toBe(0);
+    expect(p2p.sessionRef).not.toBeNull();
+    expect(readTranscript(dir).some((e) => e.kind === "error")).toBe(false);
+  });
+
+  it("预留记账:失败调用也占额度,崩溃后不回退 (方案A门槛)", async () => {
+    const p1 = path.join(root, "reserve-a.json");
+    fs.writeFileSync(p1, JSON.stringify({ speeches: [{ fail: "首次调用失败" }, "恢复\n【立场】A2"] }));
+    const p2 = writeScript(root, "reserve-b.json", ["观点B\n【立场】B"]);
+    // 第 1 轮 mock-1 失败(预留 1)+ mock-2(预留 2)= 2 = maxCalls → 耗尽暂停
+    await cmdNew(
+      ["预留记账"],
+      { providers: `mock:${p1},${p2}`, "max-rounds": "1", "max-calls": "2" },
+      { root },
+    );
+    const dir = path.join(root, "2026-07-31-预留记账");
+    const t = loadTopic(dir);
+    expect(t.status).toBe("paused");
+    expect(t.calls).toBe(2); // 失败调用也预留,不回退
+    expect(t.participants.find((p) => p.handle === "mock-1")!.failures).toBe(1); // 失败仍正常计数
+    expect(readTranscript(dir).some((e) => e.kind === "error")).toBe(true);
+  });
+
+  it("finalize 额度不足:可恢复暂停,不写兜底 summary、不标 failed (方案A门槛)", async () => {
+    const p1 = writeScript(root, "fin-a.json", ["观点A\n【立场】A", "总结A"]);
+    createTopic(root, {
+      id: "fin-budget",
+      title: "收尾额度",
+      mode: "roundtable",
+      maxRounds: 1,
+      participants: [{ handle: "mock-1", provider: p1, perspective: "a" }],
+    });
+    const dir = path.join(root, "fin-budget");
+    const resolver = (spec: string): ProviderAdapter => {
+      const inner = resolveAdapter(spec);
+      return {
+        ...inner,
+        async speak(o) {
+          if (o.prompt.includes("收尾任务")) throw new BudgetExhaustedError(1, 1);
+          return inner.speak(o);
+        },
+      };
+    };
+    const done = await runTopic(dir, { resolveAdapter: resolver, installSignalHandlers: false });
+    expect(done.status).toBe("paused");
+    expect(done.finalization?.phase).toBe("pending"); // 可恢复:续跑按代际幂等
+    expect(done.outcome).toBeUndefined(); // 不标 failed
+    expect(fs.existsSync(path.join(dir, "summary.md"))).toBe(false); // 不写兜底
+    expect(readTranscript(dir).some((e) => e.kind === "error")).toBe(false); // 不记 error
   });
 
   it("--as 指定插话人名", async () => {

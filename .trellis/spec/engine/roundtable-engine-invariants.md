@@ -150,9 +150,11 @@ ebuild(无 commit→null、最后一条胜出、error 作废会话+计数)、con
 
 ---
 
-## 不变量 9:预算闭环(4 模型裁决项 1) — 调用次数硬上限,轮次边界取消,跨 continue 持久化
 
-**契约**:--max-calls N 是**生命周期**硬上限(	opic.maxCalls),	opic.calls 跨 continue 累计(含 finalize/恢复重跑,全部 speak 经计数包装)。预算用尽只能在**轮次边界**取消(发言前检查,不打断在途调用),落盘 paused 可续;continue --max-calls <更大值> 覆盖上限后续跑。token 不可测:失败调用按下界计,预算语义不承诺 token 封顶。
+---
 
-**测试点**:continue(用尽→paused+calls 落盘+system 事件;未提高→拒绝;提高→恢复剩余轮次+收尾,累计精确)。
+## 不变量 9:调用额度(方案 A,4 模型评审裁决) — 调用前持久化预留,只承诺上界
 
+**契约**:--max-calls N 是**生命周期**额度上限(	opic.maxCalls),	opic.calls 跨 continue 累计。**预留制**:每次 speak 前先检查并原子落盘 calls+1,再启动子进程——崩溃窗口落在"已预留"一侧,保守多扣、绝不回退;只承诺上界(calls ≤ maxCalls),不承诺利用率。额度不足抛 BudgetExhaustedError,**与失败正交**:不 bump failures、不清 sessionRef、不记 error、不写兜底 summary;普通轮与 finalize 同样逐次预留,收尾额度不足落 paused + finalization.pending(代际幂等可恢复)。continue --max-calls <更大值> 覆盖上限(立即落盘)后续跑;未提高且已尽 → 拒绝。token 不可测:失败调用按下界计,额度语义不承诺 token 封顶。旧 topic 无 maxCalls → 无额度语义,天然不继承。
+
+**测试点**:continue(轮次中耗尽→paused+calls 落盘+system 事件;未提高→拒绝;提高→恢复剩余轮次+收尾累计精确;正交性:不 bump failures/不清 ref/不记 error;预留记账:失败调用也占额度;finalize 额度不足→paused+pending、无兜底 summary、无 error)。
