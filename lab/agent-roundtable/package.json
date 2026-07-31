@@ -12,6 +12,7 @@
     "dev": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "doctor": "tsx src/cli.ts doctor",
     "smoke:adapters": "tsx scripts/smoke-adapters.ts",
     "smoke:tui": "tsx scripts/smoke-tui.tsx"
   },

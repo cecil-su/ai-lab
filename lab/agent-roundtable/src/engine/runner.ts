@@ -202,6 +202,17 @@ export async function runTopic(dir: string, opts: RunOptions = {}): Promise<Topi
     }
     } // end if (!recovering)
 
+    // 末轮 stop 遗留:最后一次发言期间到达的 stop 不会再被循环内 drain 读到,
+    // 若不消费会残留在 inbox,续谈首轮 drain 会立即终止新一轮。收尾前 final drain:
+    // 仅消费(推进 cursor);stop 视作对已结束讨论的冗余请求,插话照常搬入 transcript。
+    drainInbox(dir, topic.currentRound, emit, () => {
+      emit(appendEvent(dir, {
+        kind: "system",
+        round: topic.currentRound,
+        body: "收尾阶段收到停止请求:讨论已结束,按正常收尾完成",
+      }));
+    });
+
     // ③ finalization generation:显式阶段标记使收尾崩溃幂等恢复(ADR 0030;泛化 #6)。
     const fin = topic.finalization;
     if (fin?.phase === "summary-written") {

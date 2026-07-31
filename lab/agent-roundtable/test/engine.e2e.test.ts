@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cmdContinue } from "../src/commands.js";
 import { appendInbox, readPending } from "../src/store/inbox.js";
 import { createTopic, loadTopic } from "../src/store/topic.js";
 import { readTranscript } from "../src/store/transcript.js";
@@ -45,6 +46,53 @@ describe("engine e2e (mock providers)", () => {
   let root: string;
   beforeEach(() => (root = makeTmpDir()));
   afterEach(() => removeDir(root));
+
+  it("末轮发言期间到达的 stop 被收尾前 final drain 消费,不污染续谈", async () => {
+    const p1 = writeScript(root, "fd-a.json", ["观点A\n【立场】A", "续谈A\n【立场】A2", "总结A"]);
+    const p2 = writeScript(root, "fd-b.json", ["观点B\n【立场】B", "总结B(收尾)", "续谈B\n【立场】B2"]);
+    createTopic(root, {
+      id: "fd",
+      title: "末轮stop",
+      mode: "roundtable",
+      maxRounds: 1,
+      participants: [
+        { handle: "mock-1", provider: p1, perspective: "a" },
+        { handle: "mock-2", provider: p2, perspective: "b" },
+      ],
+    });
+    const dir = path.join(root, "fd");
+    let stopWritten = false;
+    const resolver = (spec: string): ProviderAdapter => {
+      const inner = resolveAdapter(spec);
+      return {
+        ...inner,
+        async speak(o) {
+          const result = await inner.speak(o);
+          // 最后一位参与者的最后一次发言期间,人类发来 stop(此后循环内不再 drain)
+          if (spec === p2 && !stopWritten) {
+            stopWritten = true;
+            appendInbox(dir, { kind: "stop", from: "cli" });
+          }
+          return result;
+        },
+      };
+    };
+    const done = await runTopic(dir, { resolveAdapter: resolver, installSignalHandlers: false });
+    expect(done.status).toBe("completed");
+    expect(readPending(dir)).toEqual([]); // 旧 stop 已被收尾前 final drain 消费
+    expect(
+      readTranscript(dir).some((e) => e.kind === "system" && e.body?.includes("收尾阶段收到停止请求")),
+    ).toBe(true);
+
+    // 续谈首轮必须真正发言,不被残留 stop 立即终止
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const code = await cmdContinue(["fd"], { ask: "深入讨论", more: "1" }, { root, resolveAdapter: resolver });
+    vi.restoreAllMocks();
+    expect(code).toBe(0);
+    const newMessages = readTranscript(dir).filter((e) => e.kind === "message" && e.round > 1);
+    expect(newMessages.length).toBeGreaterThanOrEqual(2); // 两位参与者都发出了新一轮发言
+  });
 
   it("pause on SIGINT then continue to completion", async () => {
     const p1 = writeScript(root, "p1.json", [

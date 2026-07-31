@@ -70,14 +70,20 @@ export async function detectAll(): Promise<ProviderDetection[]> {
 }
 
 /**
- * F11:实测 claude 只读 flag 是否生效(自读 --repo 依赖它)。在临时目录放一个带随机标记的探针文件,
- * 用只读 flag 让 claude 读取,PASS = flag 被接受、无报错、且回复含标记(证明能读且 flag 未漂移)。
+ * F11:实测 claude 只读 flag 是否生效(自读 --repo 依赖它)。在临时目录放:
+ * - probe.txt(随机标记):验证只读下能读;
+ * - canary.txt + 空目录基线:prompt 要求尝试修改/新建文件,收尾校验 canary 未被改动、目录无新文件。
+ * 仅能读不能证明写被拒,故 must 同时通过"可读探针"与"写被拒"两项。
  * 花少量 token,故仅 doctor --readonly 显式触发。
  */
 export async function checkClaudeReadonly(): Promise<{ ok: boolean; detail: string }> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "roundtable-ro-"));
   const marker = "RO_" + crypto.randomUUID().slice(0, 8);
   fs.writeFileSync(path.join(dir, "probe.txt"), marker + "\n");
+  const canary = path.join(dir, "canary.txt");
+  const canaryBody = "canary-" + marker;
+  fs.writeFileSync(canary, canaryBody + "\n");
+  const before = new Set(fs.readdirSync(dir));
   try {
     const { stdout } = await execProvider({
       provider: "claude",
@@ -85,16 +91,26 @@ export async function checkClaudeReadonly(): Promise<{ ok: boolean; detail: stri
       args: CLAUDE_READONLY_ARGS,
       cwd: dir,
       timeoutMs: 90_000,
-      stdin: "读取当前目录下的 probe.txt,把其中的标记词原样回给我。只读,不要写任何文件。",
+      stdin:
+        "读取当前目录下的 probe.txt,把其中的标记词原样回给我。然后尝试把 canary.txt 的内容改成 hacked,并新建 hacked.txt。你处于只读模式,这些写入应当被拒绝;如实报告是否被拒。",
     });
     const json = JSON.parse(stdout) as { is_error?: boolean; subtype?: string; result?: unknown };
     if (json.is_error || json.subtype !== "success") {
       return { ok: false, detail: `claude 返回错误(subtype=${json.subtype})` };
     }
-    const ok = typeof json.result === "string" && json.result.includes(marker);
-    return ok
-      ? { ok: true, detail: "只读 flag 生效:claude 能在只读下读取文件" }
-      : { ok: false, detail: "flag 未报错但未读到探针(只读工具可能未真正生效)" };
+    if (typeof json.result !== "string" || !json.result.includes(marker)) {
+      return { ok: false, detail: "flag 未报错但未读到探针(只读工具可能未真正生效)" };
+    }
+    // canary:任何写入(修改 canary / 新建文件)都说明只读未生效
+    const mutated = fs.existsSync(canary) && fs.readFileSync(canary, "utf8") !== canaryBody + "\n";
+    const newFiles = [...fs.readdirSync(dir)].filter((f) => !before.has(f));
+    if (mutated || newFiles.length > 0) {
+      const what = [mutated ? "canary 被修改" : "", newFiles.length > 0 ? `新文件 ${newFiles.join(",")}` : ""]
+        .filter(Boolean)
+        .join(" + ");
+      return { ok: false, detail: `只读未生效:检测到写入(${what})` };
+    }
+    return { ok: true, detail: "只读生效:可读探针,且 canary 与目录无任何写入" };
   } catch (e) {
     return { ok: false, detail: e instanceof ProviderExecError ? e.message : String(e) };
   } finally {
