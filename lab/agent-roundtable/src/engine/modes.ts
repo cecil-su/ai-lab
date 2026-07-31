@@ -8,12 +8,31 @@ import path from "node:path";
 import { providerBase } from "../adapters/registry.js";
 import type { ProviderAdapter } from "../adapters/types.js";
 import type { Topic, TopicMode } from "../store/topic.js";
-import { appendEvent, readTranscript, type TranscriptEvent } from "../store/transcript.js";
+import { appendEvent, readTranscript, readTranscriptDetailed, type TranscriptEvent } from "../store/transcript.js";
 import { resolvePerspectiveText } from "./charter.js";
-import { buildPrompt, promptContext } from "./prompt.js";
+import { buildPrompt, promptContext, truncateBody } from "./prompt.js";
 import { canResume } from "./session-trust.js";
 
 const SUMMARY_FILE = "summary.md";
+
+/**
+ * 证据索引(4 模型裁决项):summary 追加可追溯证据段——每条结论/发言链接 transcript seq。
+ * 仅正式收尾使用(兜底 summary 无正式结论,不加)。坏行存在时显式降级标注。
+ */
+export function evidenceIndex(events: TranscriptEvent[], badLines: number[]): string {
+  const rows: string[] = [];
+  for (const e of events) {
+    if (e.kind !== "message" && e.kind !== "verdict" && e.kind !== "skip") continue;
+    const body = e.kind === "skip" ? "【跳过】" : truncateBody(e.body ?? "", 80);
+    rows.push(`- [seq ${e.seq}] R${e.round} ${e.from ?? "?"}: ${body}`);
+  }
+  if (rows.length === 0) return "";
+  let out = "\n## 证据索引\n" + rows.join("\n") + "\n";
+  if (badLines.length > 0) {
+    out += `\n> ⚠ 日志存在 ${badLines.length} 行损坏(行号 ${badLines.join(",")}),证据索引可能不完整\n`;
+  }
+  return out;
+}
 
 /** 无正式结论时写一份说明性 summary.md(覆盖语义)。供 finalize 失败兜底(#5)与无 runner 的 stop(#8)复用。 */
 export function writeFallbackSummary(dir: string, reason: string): void {
@@ -39,7 +58,8 @@ const roundtable: ModeStrategy = {
   async finalize({ dir, charter, topic, adapters, converged, timeoutMs, emit }): Promise<Topic> {
     const summarizer = topic.participants[topic.participants.length - 1]!;
     const adapter = adapters.get(summarizer.handle)!;
-    const ctx = promptContext(readTranscript(dir), topic.currentRound + 2, topic.resumeFromSeq ?? 0);
+    const detail = readTranscriptDetailed(dir);
+    const ctx = promptContext(detail.events, topic.currentRound + 2, topic.resumeFromSeq ?? 0);
     const prompt =
       buildPrompt({
         charter,
@@ -61,7 +81,7 @@ const roundtable: ModeStrategy = {
     });
 
     const header = `# 讨论总结:${topic.title}\n\n> 模式 ${topic.mode} · 完成 ${topic.currentRound}/${topic.maxRounds} 轮${converged ? " · 已收敛" : ""}\n\n`;
-    fs.writeFileSync(path.join(dir, SUMMARY_FILE), header + result.text.trim() + "\n");
+    fs.writeFileSync(path.join(dir, SUMMARY_FILE), header + result.text.trim() + "\n" + evidenceIndex(detail.events, detail.badLines));
 
     emit(appendEvent(dir, {
       kind: "system",
@@ -110,8 +130,12 @@ const debate: ModeStrategy = {
       (e) => e.kind === "verdict" && e.round === verdictRound,
     );
     if (existingVerdict?.body) {
+      const detail = readTranscriptDetailed(dir);
       const header = `# 裁决:${topic.title}\n\n> 模式 ${topic.mode} · 辩论 ${topic.currentRound}/${topic.maxRounds} 轮${converged ? " · 已收敛" : ""} · 裁决人 ${existingVerdict.from ?? judgeHandle}\n\n`;
-      fs.writeFileSync(path.join(dir, SUMMARY_FILE), header + existingVerdict.body.trim() + "\n");
+      fs.writeFileSync(
+        path.join(dir, SUMMARY_FILE),
+        header + existingVerdict.body.trim() + "\n" + evidenceIndex(detail.events, detail.badLines),
+      );
       emit(appendEvent(dir, {
         kind: "system",
         round: verdictRound,
@@ -121,7 +145,8 @@ const debate: ModeStrategy = {
     }
 
     // round+1:全部辩论轮压成立场摘要 + 最后一轮全文,喂给无记忆的裁决人
-    const ctx = promptContext(readTranscript(dir), verdictRound, topic.resumeFromSeq ?? 0);
+    const detail = readTranscriptDetailed(dir);
+    const ctx = promptContext(detail.events, verdictRound, topic.resumeFromSeq ?? 0);
     const prompt =
       buildPrompt({
         charter,
@@ -144,7 +169,10 @@ const debate: ModeStrategy = {
     emit(appendEvent(dir, { kind: "verdict", round: verdictRound, from: judgeHandle, body: result.text }));
 
     const header = `# 裁决:${topic.title}\n\n> 模式 ${topic.mode} · 辩论 ${topic.currentRound}/${topic.maxRounds} 轮${converged ? " · 已收敛" : ""} · 裁决人 ${judgeHandle}\n\n`;
-    fs.writeFileSync(path.join(dir, SUMMARY_FILE), header + result.text.trim() + "\n");
+    fs.writeFileSync(
+      path.join(dir, SUMMARY_FILE),
+      header + result.text.trim() + "\n" + evidenceIndex(detail.events, detail.badLines),
+    );
 
     emit(appendEvent(dir, {
       kind: "system",

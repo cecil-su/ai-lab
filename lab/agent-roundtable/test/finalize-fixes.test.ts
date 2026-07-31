@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTopic, loadTopic, saveTopic } from "../src/store/topic.js";
 import { runTopic } from "../src/engine/runner.js";
 import { selectMode } from "../src/engine/modes.js";
-import { appendEvent } from "../src/store/transcript.js";
+import { appendEvent, readTranscript, TRANSCRIPT_FILE } from "../src/store/transcript.js";
 import { resolveAdapter } from "../src/adapters/registry.js";
 import { makeDegraded, makeVerified, type ProviderAdapter, type SessionRef } from "../src/adapters/types.js";
 import { makeTmpDir, removeDir } from "./helpers.js";
@@ -378,5 +378,91 @@ describe("finalization generation 崩溃恢复 (③)", () => {
     expect(done.status).toBe("completed");
     expect(done.outcome).toBe("degraded"); // 有 failures>0 但收尾成功
     expect(done.participants[0]!.failures).toBeGreaterThan(0);
+  });
+});
+
+describe("证据化 summary (Phase-3 ④)", () => {
+  let root: string;
+  beforeEach(() => (root = makeTmpDir()));
+  afterEach(() => removeDir(root));
+
+  it("正式 summary 含证据索引:seq 可解析到 transcript 事件", async () => {
+    const p1 = writeScript(root, "ev-a.json", ["观点A\n【立场】A", "总结A"]);
+    const p2 = writeScript(root, "ev-b.json", ["观点B\n【立场】B", "总结B"]);
+    createTopic(root, {
+      id: "ev",
+      title: "证据索引",
+      mode: "roundtable",
+      maxRounds: 1,
+      participants: [
+        { handle: "mock-1", provider: p1, perspective: "a" },
+        { handle: "mock-2", provider: p2, perspective: "b" },
+      ],
+    });
+    const dir = path.join(root, "ev");
+    const done = await runTopic(dir, { installSignalHandlers: false });
+    expect(done.status).toBe("completed");
+    const summary = fs.readFileSync(path.join(dir, "summary.md"), "utf8");
+    expect(summary).toContain("## 证据索引");
+    // 每条索引的 seq 必须真实存在于 transcript,且格式为 [seq N]
+    const events = readTranscript(dir);
+    const seqs = new Set(events.map((e) => e.seq));
+    for (const m of summary.matchAll(/\[seq (\d+)\]/g)) {
+      expect(seqs.has(Number(m[1]))).toBe(true);
+    }
+    expect(summary).toContain("R1 mock-1");
+    expect(summary).toContain("R1 mock-2");
+  });
+
+  it("坏行降级:transcript 有损坏行时 summary 标注证据不完整", async () => {
+    const p1 = writeScript(root, "bad-a.json", ["观点A\n【立场】A", "总结A"]);
+    createTopic(root, {
+      id: "bad-ev",
+      title: "坏行证据",
+      mode: "roundtable",
+      maxRounds: 1,
+      participants: [{ handle: "mock-1", provider: p1, perspective: "a" }],
+    });
+    const dir = path.join(root, "bad-ev");
+    // 预置一条中间坏行(模拟崩溃残留合并)
+    fs.writeFileSync(path.join(dir, TRANSCRIPT_FILE), '{"seq":1,"ts":"t","kind":"system","round":0}\n{坏行}\n');
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const done = await runTopic(dir, { installSignalHandlers: false });
+    spy.mockRestore();
+    expect(done.status).toBe("completed");
+    const summary = fs.readFileSync(path.join(dir, "summary.md"), "utf8");
+    expect(summary).toContain("行损坏");
+    expect(summary).toContain("证据索引可能不完整");
+  });
+
+  it("finalize 失败兜底 summary 不含证据索引", async () => {
+    const p1 = writeScript(root, "fb-a.json", ["观点A\n【立场】A"]);
+    const p2 = writeScript(root, "fb-b.json", ["观点B\n【立场】B"]);
+    createTopic(root, {
+      id: "fb-ev",
+      title: "兜底无索引",
+      mode: "roundtable",
+      maxRounds: 1,
+      participants: [
+        { handle: "mock-1", provider: p1, perspective: "a" },
+        { handle: "mock-2", provider: p2, perspective: "b" },
+      ],
+    });
+    const dir = path.join(root, "fb-ev");
+    const failFinalize = (spec: string): ProviderAdapter => {
+      const inner = resolveAdapter(spec);
+      return {
+        ...inner,
+        async speak(o) {
+          if (o.prompt.includes("收尾任务")) throw new Error("收尾挂");
+          return inner.speak(o);
+        },
+      };
+    };
+    const done = await runTopic(dir, { resolveAdapter: failFinalize, installSignalHandlers: false });
+    expect(done.status).toBe("completed");
+    const summary = fs.readFileSync(path.join(dir, "summary.md"), "utf8");
+    expect(summary).toContain("无正式结论");
+    expect(summary).not.toContain("证据索引");
   });
 });
