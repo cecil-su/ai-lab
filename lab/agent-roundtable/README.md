@@ -177,11 +177,11 @@ roundtable stop <topic>   # runner 在跑则请求其收尾;否则直接置完�
 
 ## 已知限制与成本提示
 
-- **MVP 前台运行**:runner 是前台进程,Ctrl+C = 暂停(`continue` 无损恢复),关闭终端即中断当前发言。后台 daemon / detach 是 v2。
+- **运行形态**:前台进程 Ctrl+C = 暂停(`continue` 无损恢复);`--detach` 后台运行已实现(见上,输出落 `run.log`)。
 - **attach 真机键盘交互需真实 TTY**:插话/`:stop` 依赖终端 raw mode,请在 Windows Terminal 或 VS Code 集成终端运行;非 TTY 环境(如子进程/管道)自动降级为只读跟随。
 - **token 成本随轮数 × 参与者数线性放大**。各家基线上下文注入差异大:实测单话题 codex input ~16 万 token(基线注入大),claude 仅 ~7.6k。建议用 `--max-rounds` 与参与者数量控制成本;讨论会话以只读/受限模式运行(cwd 指向话题目录以隔离仓库上下文、压 token)。
 - **reasonix 需 npm 版**(1.8.0-rc.1),而非 scoop 旧版;本机双装时以 npm 全局入口为准(doctor 已按此探测)。
 
 ## v2 预留
 
-后台 daemon(detach 不中断讨论)、远程参与者(SSH transport 出站 / 自建频道服务 `serve` 入站客座)、ACP 接口层——架构已预留缝(topic.json `transport` 字段、store 层纯函数形态),MVP 均不实现。
+远程参与者(SSH transport 出站 / 自建频道服务 `serve` 入站客座)、ACP 接口层——架构已预留缝(topic.json `transport` 字段、store 层纯函数形态),MVP 均不实现。

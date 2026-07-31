@@ -4,6 +4,7 @@ import { resolveAdapter } from "../adapters/registry.js";
 import type { ProviderAdapter, SessionRef, SpeakResult } from "../adapters/types.js";
 import { readInboxRaw, consumedUpTo, markConsumed } from "../store/inbox.js";
 import { acquireLock, releaseLock } from "../store/lock.js";
+import { transcriptFingerprint } from "./evidence.js";
 import { loadTopic, saveTopic, transition, type Participant, type Topic, type TopicOutcome } from "../store/topic.js";
 import {
   appendEvent,
@@ -45,22 +46,31 @@ export interface RunOptions {
   onEvent?: (event: TranscriptEvent, ctx: { requestStop: () => void }) => void;
 }
 
-/** 逐轮的立场快照:message → 立场行/截断;skip → 固定标记 */
+/** 逐轮的立场快照:message → 立场行/截断;skip → 固定标记。error 不产生 stance(终审①:失败不是表态,不得参与收敛判定) */
 function stanceMap(events: TranscriptEvent[], round: number): Map<string, string> {
   const map = new Map<string, string>();
   for (const e of events) {
     if (e.round !== round || !e.from) continue;
     if (e.kind === "message") map.set(e.from, e.stance ?? (e.body ? stanceDigest(e.body) : ""));
-    else if (e.kind === "skip" || e.kind === "error") map.set(e.from, "【跳过】"); // error 与 skip 同档(F1):未表态,不阻收敛
+    else if (e.kind === "skip") map.set(e.from, SKIP_STANCE);
   }
   return map;
 }
 
-/** loop guard:全员跳过,或连续两轮全体立场完全相同 → 收敛 */
+const SKIP_STANCE = "【跳过】";
+
+/** 本轮是否存在任何 error 事件(终审①:任一失败即不得以"全员跳过"收敛) */
+function roundHasError(events: TranscriptEvent[], round: number): boolean {
+  return events.some((e) => e.round === round && e.kind === "error");
+}
+
+/** loop guard:全员 skip(且本轮无 error),或连续两轮全体立场完全相同 → 收敛 */
 export function checkConverged(events: TranscriptEvent[], round: number): boolean {
   const cur = stanceMap(events, round);
   if (cur.size === 0) return false;
-  if ([...cur.values()].every((v) => v === "【跳过】")) return true;
+  // 终审①:本轮任一 error → 不收敛(否则"全员失败"被冒充"已收敛·completed")
+  if (roundHasError(events, round)) return false;
+  if ([...cur.values()].every((v) => v === SKIP_STANCE)) return true;
   if (round < 2) return false;
   const prev = stanceMap(events, round - 1);
   if (prev.size !== cur.size) return false;
@@ -377,7 +387,14 @@ export async function runTopic(dir: string, opts: RunOptions = {}): Promise<Topi
         ? "degraded"
         : "success";
     // summary 已在盘上(正式产出或兜底);推进标记 → 落终态。此后崩溃恢复只需补 completed。
-    topic = persistBudget({ ...topic, outcome, finalization: { generation, phase: "summary-written" } });
+    // 终审④:引擎侧写入证据绑定(生成时刻 transcript 指纹 + 收尾代际),verify 默认读它。
+    // 兜底 summary 也算生成时刻(transcript 已固定),绑定同样有效。
+    topic = persistBudget({
+      ...topic,
+      outcome,
+      summaryEvidence: { transcriptHash: transcriptFingerprint(dir), generation },
+      finalization: { generation, phase: "summary-written" },
+    });
     saveTopic(dir, topic);
     topic = persistBudget({ ...transition(topic, "completed"), finalization: { generation, phase: "done" } });
     saveTopic(dir, topic);

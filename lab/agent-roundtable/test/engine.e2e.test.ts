@@ -412,7 +412,7 @@ describe("engine e2e (mock providers)", () => {
     expect(events.map((e) => e.seq)).toEqual(events.map((_, i) => i + 1));
   });
 
-  it("F1:全体失败轮提前收敛,仍落 completed", async () => {
+  it("终审①:全员失败不得收敛,连续失败达阈值走 A1 熔断 paused", async () => {
     const bad = writeScript(root, "f1-allbad.json", ["x"]);
     createTopic(root, {
       id: "f1-2",
@@ -427,8 +427,10 @@ describe("engine e2e (mock providers)", () => {
       async speak() { throw new Error("全挂"); },
     });
     const done = await runTopic(dir, { installSignalHandlers: false, resolveAdapter: resolver });
-    expect(done.status).toBe("completed");
-    expect(done.currentRound).toBe(1); // 全员失败 → 首轮即收敛,不空转到 maxRounds
+    // 全员失败不得被冒充"已收敛·completed":第 3 次连续失败触发 A1 熔断 → paused(可续)
+    expect(done.status).toBe("paused");
+    expect(done.participants[0]!.failures).toBeGreaterThanOrEqual(3);
+    expect(readTranscript(dir).some((e) => e.kind === "system" && e.body?.includes("连续 3 轮失败"))).toBe(true);
   });
 
   it("F1:finalize 失败也落 completed 并记 error 事件", async () => {
@@ -603,6 +605,27 @@ describe("engine e2e (mock providers)", () => {
       { seq: 4, ts: "", kind: "message", round: 2, from: "b", body: "x", stance: "立场2" },
     ]);
     expect(checkConverged(events, 2)).toBe(false);
+  });
+
+  // 终审②:error/skip 四象限 —— 纯 skip 可收敛;任一 error 不得以"全员跳过"收尾;混合不得收尾
+  it("四象限:纯 skip → 收敛;任一 error → 不收敛;error+skip 混合 → 不收敛", () => {
+    const skipAll = readTranscriptFrom([
+      { seq: 1, ts: "", kind: "skip", round: 1, from: "a" },
+      { seq: 2, ts: "", kind: "skip", round: 1, from: "b" },
+    ]);
+    expect(checkConverged(skipAll, 1)).toBe(true);
+
+    const errorAll = readTranscriptFrom([
+      { seq: 1, ts: "", kind: "error", round: 1, from: "a", body: "挂" },
+      { seq: 2, ts: "", kind: "error", round: 1, from: "b", body: "挂" },
+    ]);
+    expect(checkConverged(errorAll, 1)).toBe(false); // 全员失败不是收敛
+
+    const mixed = readTranscriptFrom([
+      { seq: 1, ts: "", kind: "skip", round: 1, from: "a" },
+      { seq: 2, ts: "", kind: "error", round: 1, from: "b", body: "挂" },
+    ]);
+    expect(checkConverged(mixed, 1)).toBe(false); // 混合不得以"全员跳过"收尾
   });
 
   it("mock 故障步骤:首轮注入 fail → error 事件 + failures 计数 + degraded (4模型反馈项 4)", async () => {

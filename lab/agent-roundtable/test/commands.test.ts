@@ -209,6 +209,16 @@ describe("cmdStop 无 runner → cancelled + summary (#8/①)", () => {
   });
 });
 
+describe("终审⑥:README 能力叙述一致性", () => {
+  it("detach 已实现,不再声称属 v2", () => {
+    const readme = fs.readFileSync(new URL("../README.md", import.meta.url), "utf8");
+    // detach 已实现:不再出现在 v2 预留列表中,且不得再声称"后台 daemon / detach 是 v2"
+    expect(readme).toContain("--detach` 后台运行");
+    expect(readme).not.toContain("后台 daemon(detach 不中断讨论)");
+    expect(readme).not.toContain("后台 daemon / detach 是 v2");
+  });
+});
+
 describe("slugify (A5:中文标题产出可辨认 id)", () => {
   it("保留中文,不塌成空", () => {
     const s = slugify("服务端缓存选型:Redis vs 进程内存");

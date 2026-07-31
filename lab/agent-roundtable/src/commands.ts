@@ -237,7 +237,11 @@ export async function cmdNew(positional: string[], flags: Flags, ctx: CmdContext
       { resumableSession: adapterResumable(spec, adapterResolver) },
     ]),
   );
-  const topic = createTopic(root, { id, title, mode, maxRounds, participants, repo, capabilities, maxCalls });
+  // 终审⑤:动态默认预算 —— 未显式传 --max-calls 时按公式推导并留余量(失败调用也占额度):
+  // 参与者×轮数 + 收尾调用数(debate 裁决人是全新会话,收尾=2) + 余量 2。
+  const finalizeCalls = mode === "debate" ? 2 : 1;
+  const effectiveMaxCalls = maxCalls ?? participants.length * maxRounds + finalizeCalls + 2;
+  const topic = createTopic(root, { id, title, mode, maxRounds, participants, repo, capabilities, maxCalls: effectiveMaxCalls });
   const dir = topicDir(root, id);
   fs.writeFileSync(
     path.join(dir, "charter.md"),
@@ -259,9 +263,9 @@ export async function cmdNew(positional: string[], flags: Flags, ctx: CmdContext
 
   console.log(`已开题: ${id}(${participants.length} 位参与者,${mode},最多 ${maxRounds} 轮)`);
   // 预算闭环:开跑前展示确定性调用次数与实测基线估算(失败以下界计,不可预测)
-  if (maxCalls !== undefined) {
-    const callsEst = participants.length * maxRounds + (mode === "debate" ? 2 : 1);
-    console.log(`预算护栏: 最多 ${maxCalls} 次调用(本轮预计 ${callsEst} 次),用尽将在轮次边界暂停并可续跑`);
+  {
+    const callsEst = participants.length * maxRounds + finalizeCalls;
+    console.log(`预算护栏: 最多 ${effectiveMaxCalls} 次调用(本轮预计 ${callsEst} 次${maxCalls === undefined ? ",默认含余量 2" : ""}),用尽将在轮次边界暂停并可续跑`);
   }
 
   // detach(Phase-3 ⑤):spawn 后台子进程跑 run-detached,父进程立即返回;

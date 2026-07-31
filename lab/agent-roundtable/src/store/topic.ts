@@ -56,6 +56,11 @@ export interface Topic {
    * ③ 收尾代际标记(ADR 0030):把"收尾是否完成"从散落多文件收敛到一处显式状态,
    * 使 finalize 崩溃可幂等恢复。缺省 = 从未进入收尾。generation 每次进入收尾自增(续谈按代)。
    */
+  /**
+   * 终审④:引擎在 finalize 成功后写入的 summary 证据绑定——生成时刻 transcript 快照指纹 + 收尾代际。
+   * summary 是模型产物,不自报校验凭证;verify 默认读此元数据,旧话题无绑定 → 不可验证。
+   */
+  summaryEvidence?: { transcriptHash: string; generation: number };
   finalization?: { generation: number; phase: "pending" | "summary-written" | "done" };
 }
 

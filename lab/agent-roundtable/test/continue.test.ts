@@ -259,6 +259,20 @@ describe("cmdContinue 续谈(R3 方案 B)", () => {
     expect(readTranscript(dir).filter((e) => e.kind === "message" && e.round === 2)).toHaveLength(2);
   });
 
+  it("终审⑤:未传 --max-calls 时默认预算按公式落盘(参与者×轮数+收尾+余量)", async () => {
+    const p1 = writeScript(root, "dflt-a.json", ["观点A\n【立场】A", "总结A"]);
+    const p2 = writeScript(root, "dflt-b.json", ["观点B\n【立场】B", "总结B"]);
+    // roundtable:2×1 + 1 + 2 = 5
+    await cmdNew(["默认预算"], { providers: `${p1},${p2}`, "max-rounds": "1" }, { root });
+    expect(loadTopic(path.join(root, "2026-07-31-默认预算")).maxCalls).toBe(5);
+    // debate:2×1 + 2 + 2 = 6(裁决人是全新会话,收尾=2)
+    await cmdNew(["默认预算辩论"], { providers: `${p1},${p2}`, "max-rounds": "1", mode: "debate" }, { root });
+    expect(loadTopic(path.join(root, "2026-07-31-默认预算辩论")).maxCalls).toBe(6);
+    // 显式 --max-calls 优先
+    await cmdNew(["显式预算"], { providers: `${p1},${p2}`, "max-rounds": "1", "max-calls": "3" }, { root });
+    expect(loadTopic(path.join(root, "2026-07-31-显式预算")).maxCalls).toBe(3);
+  });
+
   it("预算刚好够 → completed,calls 精确落盘", async () => {
     const p1 = writeScript(root, "b2-a.json", ["观点A\n【立场】A", "总结A"]);
     const p2 = writeScript(root, "b2-b.json", ["观点B\n【立场】B", "总结B"]);
