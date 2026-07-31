@@ -74,7 +74,10 @@ spawn / stdin / 超时杀进程 / stderr 采集 / 退出码→结构化错误 / 
 > - **timeout** 路径:`killTree(child.pid)`,整树退出触发 `close` 后再 `reject`(不要只 `child.kill()`)。
 > - **流 error / 启动失败**(`stdout.on('error')` 等)路径:先 `killTree` 再 `reject`,不能只 `reject` 把孙进程留下。
 > - 用一个 `settled` 单次闸门收敛 timeout / close / fail 三路径,防双 settle;kill 失败也要保证最终 reject 不永挂。
-> - 验证:假 provider fork 一个写心跳的 detached 孙进程,超时后断言心跳停止(锚点 `test/exec-treekill.test.ts`)。
+> - **先礼后兵(TERM→KILL)**:POSIX 必须在首次终止前捕获整树 pid+进程启动身份,先发 SIGTERM;宽限后重新确认同一身份并吸收存活成员的新后代,再 SIGKILL。不能在根退出后仅从原 root PID 重新遍历,否则 reparent 的 detached 后代会逃逸;也不能留下未取消 timer 对复用 PID 二次强杀。
+> - timeout / 流 error / overflow 必须共用同一终止 Promise,在整树退出或有界强杀确认结束后才 reject;不得在“TERM 已发送”时提前 settle。
+> - ⚠ **Windows 限制**:tree-kill 在 win32 恒走 `taskkill /pid /T /F`(强杀,忽略 signal),故 TERM→KILL 优雅期**只在 POSIX 生效**,Windows 仍即时强杀。相关优雅时序测试须 `skipIf(win32)`。
+> - 验证:除根/孙都忽略 TERM 外,必须覆盖“根响应 TERM 退出、detached 孙忽略 TERM”的 reparent 反例,以及 output overflow reject 后心跳已停止(`test/exec-term-kill.test.ts` / `test/exec-output-cap.test.ts`)。
 
 > **Gotcha(输出无界累积 = OOM)**:`stdout += chunk` 无上限时,失控/话痨 provider 能把单进程内存吃爆(本地长会话尤易踩)。
 >

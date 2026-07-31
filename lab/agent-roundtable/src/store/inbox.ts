@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { renameWithRetry } from "./jsonl.js";
 
 export const INBOX_FILE = "inbox.jsonl";
 const CURSOR_FILE = "inbox.cursor";
@@ -133,7 +134,13 @@ export function readPending(dir: string): InboxEntry[] {
 
 export function markConsumed(dir: string, throughLines: number): void {
   const lines = Math.max(throughLines, consumedUpTo(dir));
-  const tmp = path.join(dir, CURSOR_FILE + ".tmp");
+  // 唯一 tmp 名 + EPERM 重试,避免 Windows 瞬态句柄导致 cursor 更新失败
+  const tmp = path.join(dir, `${CURSOR_FILE}.tmp-${process.pid}-${Date.now().toString(36)}`);
   fs.writeFileSync(tmp, JSON.stringify({ lines }) + "\n");
-  fs.renameSync(tmp, path.join(dir, CURSOR_FILE));
+  try {
+    renameWithRetry(tmp, path.join(dir, CURSOR_FILE));
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
+    throw err;
+  }
 }
