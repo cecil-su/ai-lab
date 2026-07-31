@@ -36,9 +36,13 @@ describe("stance extraction (pure)", () => {
     expect(stanceDigest("没有立场的长正文")).toBe("没有立场的长正文");
   });
 
-  it("isSkip detects the skip marker", () => {
+  it("isSkip: 仅整段严格等于单行标记才算跳过,其余正文保留", () => {
     expect(isSkip("【跳过】")).toBe(true);
+    expect(isSkip("  【跳过】\n")).toBe(true); // 允许首尾空白
+    expect(isSkip("我不选择【跳过】,继续给出结论")).toBe(false); // 否定句不得丢正文
+    expect(isSkip("【跳过】的理由:见上轮")).toBe(false); // 引用/解释不得判 skip
     expect(isSkip("我有话说\n【立场】继续")).toBe(false);
+    expect(isSkip("")).toBe(false);
   });
 });
 

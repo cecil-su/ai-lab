@@ -4,7 +4,7 @@
 import type { TranscriptEvent } from "../store/transcript.js";
 
 const STANCE_RE = /^\s*【立场】\s*(.*\S)\s*$/;
-const SKIP_RE = /【跳过】/;
+const SKIP_MARKER = "【跳过】";
 
 /** 从发言尾部提取一行【立场】<一句话>,返回一句话内容;缺失返回 null */
 export function extractStance(body: string): string | null {
@@ -27,8 +27,13 @@ export function stanceDigest(body: string): string {
   return extractStance(body) ?? truncateBody(body);
 }
 
+/**
+ * 仅当整段正文(trim 后)严格等于单行跳过标记时判为 skip;
+ * 含其他内容(如否定句「我不选择【跳过】」、引用协议 marker、多行正文)必须保留为 message,
+ * 不得用子串匹配静默丢弃正文。
+ */
 export function isSkip(body: string): boolean {
-  return SKIP_RE.test(body.trim());
+  return body.trim() === SKIP_MARKER;
 }
 
 // R4c 旋钮:单条引用发言的最大字数,超出截断(压制 token)
