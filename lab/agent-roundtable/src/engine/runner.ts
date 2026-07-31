@@ -4,7 +4,7 @@ import { resolveAdapter } from "../adapters/registry.js";
 import type { ProviderAdapter, SessionRef, SpeakResult } from "../adapters/types.js";
 import { readInboxRaw, consumedUpTo, markConsumed } from "../store/inbox.js";
 import { acquireLock, releaseLock } from "../store/lock.js";
-import { loadTopic, saveTopic, transition, type Participant, type Topic } from "../store/topic.js";
+import { loadTopic, saveTopic, transition, type Participant, type Topic, type TopicOutcome } from "../store/topic.js";
 import {
   appendEvent,
   readTranscript,
@@ -115,7 +115,8 @@ export async function runTopic(dir: string, opts: RunOptions = {}): Promise<Topi
 
   try {
     let topic = loadTopic(dir);
-    if (topic.status === "completed") return topic;
+    // completed/cancelled 都是终态;只有 cmdContinue 显式重开为 active 后才能再次运行。
+    if (topic.status === "completed" || topic.status === "cancelled") return topic;
     topic = transition(topic, "active");
     saveTopic(dir, topic);
 
@@ -204,7 +205,9 @@ export async function runTopic(dir: string, opts: RunOptions = {}): Promise<Topi
     // ③ finalization generation:显式阶段标记使收尾崩溃幂等恢复(ADR 0030;泛化 #6)。
     const fin = topic.finalization;
     if (fin?.phase === "summary-written") {
-      // 恢复:summary 已产,仅差落终态 → 直接完成,不重跑收尾
+      // 恢复:summary 已产,仅差落终态 → 直接完成,不重跑收尾。
+      // HEAD-era 崩溃记录可能没有 outcome;即使有 participant failure 也可能同时 finalize 失败,
+      // 无持久化结果无法可靠推导,故保持 unknown,不得臆测 success/degraded。
       topic = { ...transition(topic, "completed"), finalization: { generation: fin.generation, phase: "done" } };
       saveTopic(dir, topic);
       return topic;
@@ -216,6 +219,7 @@ export async function runTopic(dir: string, opts: RunOptions = {}): Promise<Topi
 
     // 收尾:按模式分派(roundtable=末位总结 / debate=裁决轮)→ summary.md
     // finalize 失败(如裁决人 provider 挂)也要落确定态,不留 active(F1)
+    let failedFinalize = false;
     try {
       topic = await selectMode(topic.mode).finalize({ dir, charter, topic, adapters, converged, timeoutMs, emit });
     } catch (err) {
@@ -233,9 +237,17 @@ export async function runTopic(dir: string, opts: RunOptions = {}): Promise<Topi
       );
       // #5:收尾失败作废末位总结者的会话引用,避免续谈时带着可能失效/被污染的 ref 走增量
       topic = clearSession(topic, topic.participants[topic.participants.length - 1]!.handle);
+      failedFinalize = true;
     }
+    // ①:结果态与 status 正交 —— finalize 自身失败=failed;否则有参与者失败=degraded,全成=success。
+    // 在 summary-written 一并落盘,恢复分支(上面)直接沿用已存 outcome,不重算。
+    const outcome: TopicOutcome = failedFinalize
+      ? "failed"
+      : topic.participants.some((p) => p.failures > 0)
+        ? "degraded"
+        : "success";
     // summary 已在盘上(正式产出或兜底);推进标记 → 落终态。此后崩溃恢复只需补 completed。
-    topic = { ...topic, finalization: { generation, phase: "summary-written" } };
+    topic = { ...topic, outcome, finalization: { generation, phase: "summary-written" } };
     saveTopic(dir, topic);
     topic = { ...transition(topic, "completed"), finalization: { generation, phase: "done" } };
     saveTopic(dir, topic);

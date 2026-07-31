@@ -4,14 +4,14 @@
 
 ---
 
-## 不变量 1:`status==="completed"` ⇒ `summary.md` 必然存在
+## 不变量 1:终态(`completed` / `cancelled`)⇒ `summary.md` 必然存在
 
-**契约**:任何把话题落到 `completed` 的路径,落盘前都要保证 `summary.md` 存在;失败/人工终止也要写一份**说明性** summary,不得留"无产物的伪完成"。
+**契约**:任何把话题落到**终态**的路径,落盘前都要保证 `summary.md` 存在;失败/人工终止也要写一份**说明性** summary,不得留"无产物的伪完成"。
 
-**三条落 completed 的路径都要覆盖**:
-- runner 正常收尾:`selectMode(mode).finalize()` 产出正式 summary。
-- runner 收尾失败(catch):**无条件覆盖写**兜底 summary —— 不是"存在即跳过"。续谈场景磁盘上有上一代旧 summary,本代失败若跳过写入,会把旧结论冒充本代结论。
-- 无 runner 的 `stop`(`commands.ts` `cmdStop`):置 completed 前补写终止说明 summary。
+**所有落终态的路径都要覆盖**:
+- runner 正常收尾 → `completed`:`selectMode(mode).finalize()` 产出正式 summary。
+- runner 收尾失败(catch)→ `completed`:**无条件覆盖写**兜底 summary —— 不是"存在即跳过"。续谈场景磁盘上有上一代旧 summary,本代失败若跳过写入,会把旧结论冒充本代结论。
+- 无 runner 的 `stop`(`commands.ts` `cmdStop`)→ `cancelled`:置终态前补写终止说明 summary(①:人工无收尾终止是 `cancelled` 而非 `completed`)。
 
 **复用**:`writeFallbackSummary(dir, reason)`(`engine/modes.ts` 导出)统一"无正式结论"文案,失败兜底与 `cmdStop` 共用,防文案漂移。
 
@@ -24,14 +24,14 @@ if (!fs.existsSync(summaryFile)) fs.writeFileSync(summaryFile, 失败文案);
 // ❌ cmdStop 无 runner 直接翻状态,产出无 summary 的 completed
 saveTopic(dir, transition(topic, "completed"));
 
-// ✅ 无条件覆盖 / 补写后再落 completed
+// ✅ runner 收尾失败:无条件覆盖后落 completed·failed
 writeFallbackSummary(dir, `收尾失败:${errText(err)}`);
-// cmdStop:
+// cmdStop 无 runner:补终止说明后落 cancelled,且不携带旧 outcome
 if (!fs.existsSync(path.join(dir, "summary.md"))) writeFallbackSummary(dir, "经 CLI 人工终止,无正式结论。");
-saveTopic(dir, transition(topic, "completed"));
+saveTopic(dir, { ...transition(topic, "cancelled"), outcome: undefined });
 ```
 
-**测试点**:`engine.e2e`(finalize 失败仍写兜底、内容为"无正式结论")、`finalize-fixes`(失败覆盖旧 summary)、`commands`(cmdStop 无 runner → completed 且有 summary)。
+**测试点**:`engine.e2e`(finalize 失败仍写兜底)、`finalize-fixes`(失败覆盖旧 summary)、`commands`(cmdStop 无 runner → cancelled + summary + 清 outcome)。
 
 ---
 
@@ -103,4 +103,25 @@ try { fs.writeSync(fd, JSON.stringify(mine)); } finally { fs.closeSync(fd); }
 
 ---
 
-**Core Principle**: completed / lock / sessionRef 都是被全局依赖的终态与凭证——它们的产生必须在并发、超时、崩溃、人工中断下都成立,不能只在 happy path 成立。
+## 不变量 5:status(运行态)与 outcome(结果态)正交(ADR 0031)
+
+**契约**:两个轴分开表达,不把结果压进 `completed`:
+- `status: active | paused | completed | cancelled` —— 话题在生命周期的哪。`cancelled` = 人工无收尾终止(`cmdStop` 无 runner);收尾阶段由 `finalization` 标记表达,**不设 `finalizing` status**(Phase-1 ③ 已覆盖)。`completed` 与 `cancelled` 均可 `→active` 续谈重开。
+- `outcome?: success | degraded | failed` —— 结果如何。`success`=正常;`degraded`=有参与者 `failures>0` 但完成;`failed`=finalize 环节自身失败。在 runner 落 `summary-written` 时一并写盘(恢复分支沿用不重算)。`cancelled` 不带 outcome。
+- `outcome` **不进 transition 状态机**(两轴正交,避免 4×3 组合爆炸;transition 只校验 status)。
+- 兼容:旧 `completed` 无 outcome 一律保持缺省(unknown),不得臆测 success/degraded。即使 `participants.failures>0`,旧版 finalizer 仍可能同时失败(按新优先级应为 failed),仅凭 topic.json 无法可靠区分。
+- 展示:`render`/`list` 把非 success 的 outcome 缀在 completed 后(如 `已完成·降级` / `completed·failed`)。
+
+**测试点**:`finalize-fixes`(success/degraded/failed + HEAD-era summary-written unknown)、`commands`(无 runner stop→cancelled 且 engine 不静默重启)、`continue`(completed/cancelled 重开清旧 outcome)、`topic`(旧 completed 即使有 failures 也保持 unknown)。
+
+---
+
+## 不变量 6:`--repo` 自读对 inherited provider 默认拒绝(ADR 0031 / 评审点 5)
+
+**契约**:`--repo`(自读)下,未强制只读(`capabilities.codeAccess !== "enforced"`)的 provider **默认拒绝创建**,须显式 `--allow-unsafe-repo` 覆盖(覆盖后降级为实验特性告警)。策略在创建入口统一执行,不在运行期重判。enforced(claude/codex)可直接运行,但仍须披露“只读不等于项目指令/plugin/hook 隔离”,不能把 codeAccess 写权限能力夸大为安全边界。
+
+**测试点**:`commands` 除 provider 分类外必须走 `cmdNew` 全链路:inherited 无覆盖→非零且不建话题;显式覆盖→建成并告警;全 enforced→建成但仍显示通用实验性/非隔离披露。测试通过注入 adapter resolver 离线执行,不依赖真实 CLI。
+
+---
+
+**Core Principle**: 终态 / lock / sessionRef / 结果态 都是被全局依赖的凭证与语义——它们的产生必须在并发、超时、崩溃、人工中断下都成立,不能只在 happy path 成立。

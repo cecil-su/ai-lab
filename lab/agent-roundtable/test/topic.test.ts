@@ -103,6 +103,33 @@ describe("topic store", () => {
     expect(() => transition(topic, "paused")).toThrow(/invalid status transition/);
   });
 
+  it("status machine 支持 cancelled 终态与续谈重开 (①)", () => {
+    let topic = createTopic(root, INPUT);
+    topic = transition(topic, "cancelled"); // active → cancelled
+    expect(topic.status).toBe("cancelled");
+    expect(transition(topic, "active").status).toBe("active"); // cancelled → active 续谈
+    let t2 = transition(createTopic(root, { ...INPUT, id: "c2" }), "paused");
+    expect(transition(t2, "cancelled").status).toBe("cancelled"); // paused → cancelled
+    // completed 不能直接转 cancelled(只能 →active)
+    expect(() => transition({ ...topic, status: "completed" }, "cancelled")).toThrow(/invalid/);
+    void t2;
+  });
+
+  it("loadTopic 兼容:旧 completed 即使有累计失败也保持 outcome unknown (①)", () => {
+    createTopic(root, INPUT);
+    const dir = path.join(root, INPUT.id);
+    const legacy = JSON.parse(fs.readFileSync(path.join(dir, "topic.json"), "utf8"));
+    legacy.status = "completed";
+    delete legacy.outcome;
+    fs.writeFileSync(path.join(dir, "topic.json"), JSON.stringify(legacy));
+    expect(loadTopic(dir).outcome).toBeUndefined(); // 也可能是旧版 finalizer 失败,结果未知
+
+    legacy.participants[0].failures = 1;
+    fs.writeFileSync(path.join(dir, "topic.json"), JSON.stringify(legacy));
+    // participant failure 可能与 finalizer failure 同时发生,不能可靠选择 degraded/failed。
+    expect(loadTopic(dir).outcome).toBeUndefined();
+  });
+
   it("listTopics returns topics and ignores stray dirs", () => {
     createTopic(root, INPUT);
     createTopic(root, { ...INPUT, id: "another-topic" });

@@ -6,7 +6,10 @@ import { fromLegacy } from "../engine/session-trust.js";
 import { writeJsonAtomic } from "./jsonl.js";
 
 export type TopicMode = "roundtable" | "debate";
-export type TopicStatus = "active" | "paused" | "completed";
+// 运行态(ADR 0031)。cancelled = 人工无收尾终止;收尾阶段由 finalization 标记表达,不设 finalizing 态。
+export type TopicStatus = "active" | "paused" | "completed" | "cancelled";
+// 结果态(ADR 0031),与 status 正交:success=正常;degraded=有参与者失败但完成;failed=收尾自身失败。
+export type TopicOutcome = "success" | "degraded" | "failed";
 export type Perspective = string | { custom: string };
 
 export interface Participant {
@@ -27,6 +30,8 @@ export interface Topic {
   title: string;
   mode: TopicMode;
   status: TopicStatus;
+  /** 结果态(ADR 0031),与 status 正交;缺省表示未收尾或旧数据结果不可可靠判定 */
+  outcome?: TopicOutcome;
   maxRounds: number;
   currentRound: number;
   createdAt: string;
@@ -107,6 +112,8 @@ export function loadTopic(dir: string): Topic {
       p.sessionRef = fromLegacy(providerBase(p.provider), legacyRef);
     }
   }
+  // ①:旧 completed 无 outcome 时一律保持缺省(unknown):即使有参与者 failures,
+  // 旧版 finalizer 仍可能同时失败(按新优先级应为 failed),仅凭 topic.json 无法可靠区分。
   raw.version = 2; // 惰性升级,下次 saveTopic 落 v2
   return raw;
 }
@@ -116,9 +123,10 @@ export function saveTopic(dir: string, topic: Topic): void {
 }
 
 const TRANSITIONS: Record<TopicStatus, TopicStatus[]> = {
-  active: ["paused", "completed"],
-  paused: ["active", "completed"],
+  active: ["paused", "completed", "cancelled"],
+  paused: ["active", "completed", "cancelled"],
   completed: ["active"], // 续谈重开(F2):completed → active 合法化
+  cancelled: ["active"], // 取消后同样可续谈重开(①)
 };
 
 export function transition(topic: Topic, next: TopicStatus): Topic {

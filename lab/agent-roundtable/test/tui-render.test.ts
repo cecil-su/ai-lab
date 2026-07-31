@@ -148,9 +148,12 @@ describe("computeStatusBar", () => {
     });
   });
 
-  it("reports runner state from lock and completion status", () => {
+  it("reports runner state from lock, terminal status, and outcome", () => {
     expect(computeStatusBar(topic({ status: "paused" }), false).runner).toBe("未运行");
     expect(computeStatusBar(topic({ status: "completed" }), false).runner).toBe("已完成");
+    expect(computeStatusBar(topic({ status: "completed", outcome: "degraded" }), false).runner).toBe("已完成·降级");
+    expect(computeStatusBar(topic({ status: "completed", outcome: "failed" }), false).runner).toBe("已完成·失败");
+    expect(computeStatusBar(topic({ status: "cancelled" }), false).runner).toBe("已取消");
     expect(computeStatusBar(topic({ status: "completed" }), true).runner).toBe("运行中");
   });
 });

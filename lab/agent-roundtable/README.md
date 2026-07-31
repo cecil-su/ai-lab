@@ -52,13 +52,15 @@ roundtable new "审查这个模块的设计缺陷" --providers claude,codex \
 roundtable new "审查 src 目录" --providers claude,codex \
   --context-dir src/engine --context-glob "*.ts"
 
-# 自读:让参与者在只读下自己检索代码仓库(codex/opencode/reasonix 用自带文件工具,claude 走 plan 只读)
+# 自读:enforced provider 可直接使用;未强制只读的 provider 默认拒绝
 roundtable new "审查本仓库的架构缺陷" --providers claude,codex --repo .
+# 若明确接受 OpenCode/Reasonix 可能越界写的风险,必须显式覆盖
+roundtable new "审查本仓库的架构缺陷" --providers opencode,reasonix --repo . --allow-unsafe-repo
 ```
 
 **接触代码的两条路线**(可叠加):
 - `--context-file` / `--context-dir`(**递归**子目录,可配 `--context-glob "*.ts"` 按文件名过滤)**注入**:把文件嵌入 charter,**所有参与者(含 claude)**都能读到;材料随 charter 每轮重发,注意 token,超 200KB 上限会**硬裁剪尾部文件**并在材料里列出被裁清单(不静默)。注入侧做了**降低指令混淆**的基础处理(材料前置"数据非指令"声明、动态代码围栏防逃逸、二进制文件跳过),但不等于安全隔离——被评审文件本就是不可信输入。
-- `--repo <路径>` **自读(实验)**:发言子进程 cwd 指向该仓库并开只读,有文件工具的参与者自己 grep/read;claude 从"禁工具"切到 `--permission-mode plan Read/Grep/Glob`(已真机核准,`doctor --readonly` 可复验),codex 已 `-s read-only`;opencode/reasonix 依赖各自默认只读,未深度加固。**注意**:自读路径**绕过**注入侧的围栏防护——仓库文件与 transcript 会被声明为"数据非指令",但这只是**降低指令混淆**,不构成安全隔离。未设 `--repo` 时行为不变。
+- `--repo <路径>` **自读(实验)**:发言子进程 cwd 指向该仓库,有文件工具的参与者自己 grep/read。claude 使用 `--permission-mode plan Read/Grep/Glob`,codex 使用 `-s read-only`,两者声明为 `enforced`;opencode/reasonix 仅继承各自默认权限,因此默认拒绝与 `--repo` 联用,必须加 `--allow-unsafe-repo` 才放行并显示风险告警。**注意**:即使是 enforced provider,只读也不等于项目指令/plugin/hook 隔离;自读路径仍会**绕过**注入侧围栏——仓库文件与 transcript 的"数据非指令"声明只降低指令混淆,不构成安全隔离。未设 `--repo` 时行为不变。
 
 charter 还会附一行**讨论记录自读**提示:完整 `transcript.jsonl` 供有文件工具的参与者**按需**逐字回看全场(注入+增量仍是每轮主通道,常规发言无需读它,不重复烧 token)。
 

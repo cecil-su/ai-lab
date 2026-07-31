@@ -125,6 +125,7 @@ describe("finalize 信任闸门 + summary 覆盖 (#5)", () => {
     const topic = await runTopic(dir, { resolveAdapter: failFinalize, installSignalHandlers: false });
 
     expect(topic.status).toBe("completed");
+    expect(topic.outcome).toBe("failed"); // ①:finalize 自身失败 → failed
     const summary = fs.readFileSync(path.join(dir, "summary.md"), "utf8");
     expect(summary).not.toContain("OLDCONTENT"); // 旧结论被覆盖
     expect(summary).toContain("无正式结论");
@@ -257,8 +258,22 @@ describe("finalization generation 崩溃恢复 (③)", () => {
     const done = await runTopic(dir, { resolveAdapter: countingResolver, installSignalHandlers: false });
     expect(calls()).toBe(0); // 完全不调裁决人
     expect(done.status).toBe("completed");
+    expect(done.outcome).toBeUndefined(); // HEAD-era 无 outcome 的崩溃记录结果未知,不得臆测 success
     expect(done.finalization?.phase).toBe("done");
     expect(fs.readFileSync(path.join(dir, "summary.md"), "utf8")).toContain("结论OLD"); // 已产 summary 保留
+  });
+
+  it("summary-written 旧记录即使有累计失败 → 结果仍 unknown", async () => {
+    const { dir, countingResolver, calls } = seedInterrupted("summary-written", { summary: "# 已产出\n" });
+    const interrupted = loadTopic(dir);
+    interrupted.participants[0]!.failures = 1;
+    saveTopic(dir, interrupted);
+
+    const done = await runTopic(dir, { resolveAdapter: countingResolver, installSignalHandlers: false });
+    expect(calls()).toBe(0);
+    expect(done.status).toBe("completed");
+    expect(done.outcome).toBeUndefined();
+    expect(loadTopic(dir).outcome).toBeUndefined();
   });
 
   it("pending 且已有本代 verdict → 据其重建,不二次裁决(承接 #6)", async () => {
@@ -299,8 +314,35 @@ describe("finalization generation 崩溃恢复 (③)", () => {
     });
     const done = await runTopic(dir, { resolveAdapter: resolver, installSignalHandlers: false });
     expect(done.status).toBe("completed");
+    expect(done.outcome).toBe("success"); // ①:全成 → success
     expect(done.finalization?.phase).toBe("done"); // fresh 收尾也落显式标记
     expect(done.finalization?.generation).toBe(1);
     expect(calls).toBeGreaterThan(0);
+  });
+
+  it("① 有参与者失败但完成 → outcome=degraded", async () => {
+    const p1 = writeScript(root, "p1.json", ["立论A"]);
+    createTopic(root, {
+      id: "deg",
+      title: "x",
+      mode: "debate",
+      maxRounds: 1,
+      participants: [{ handle: "mock-1", provider: p1, perspective: "正方" }],
+    });
+    const dir = path.join(root, "deg");
+    // 交锋轮失败一次(bumpFailures→1,未达熔断阈值 3),裁决轮成功 → 完成但 degraded
+    let n = 0;
+    const resolver = (spec: string): ProviderAdapter => ({
+      ...resolveAdapter(spec),
+      async speak(o) {
+        n += 1;
+        if (!o.prompt.includes("裁决任务")) throw new Error("交锋轮挂一次");
+        return { text: "裁决:结论X", sessionRef: makeVerified("mock", "x"), tokens: { input: 1, cached: 0, output: 1 } };
+      },
+    });
+    const done = await runTopic(dir, { resolveAdapter: resolver, installSignalHandlers: false });
+    expect(done.status).toBe("completed");
+    expect(done.outcome).toBe("degraded"); // 有 failures>0 但收尾成功
+    expect(done.participants[0]!.failures).toBeGreaterThan(0);
   });
 });

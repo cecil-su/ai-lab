@@ -1,9 +1,93 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cmdStop, listView, slugify } from "../src/commands.js";
-import { createTopic, listTopics, loadTopic } from "../src/store/topic.js";
+import { cmdNew, cmdStop, inheritedProviders, listView, slugify } from "../src/commands.js";
+import type { ProviderAdapter } from "../src/adapters/types.js";
+import { makeVerified } from "../src/adapters/types.js";
+import { runTopic } from "../src/engine/runner.js";
+import { createTopic, listTopics, loadTopic, saveTopic, transition } from "../src/store/topic.js";
 import { makeTmpDir, removeDir } from "./helpers.js";
+
+describe("inheritedProviders：--repo 安全策略判定 (②)", () => {
+  it("全 enforced(claude/codex)→ 空(无需 unsafe override)", () => {
+    expect(inheritedProviders(["claude", "codex"])).toEqual([]);
+  });
+  it("点名 inherited(opencode/reasonix),去重", () => {
+    expect(inheritedProviders(["opencode", "reasonix", "claude"]).sort()).toEqual(["opencode", "reasonix"]);
+  });
+  it("mock 不计入(isMockSpec 排除)", () => {
+    expect(inheritedProviders(["mock:/x/s.json", "opencode"])).toEqual(["opencode"]);
+  });
+});
+
+describe("cmdNew --repo capabilities enforcement (②)", () => {
+  let root: string;
+  beforeEach(() => {
+    root = makeTmpDir();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    removeDir(root);
+  });
+
+  const resolver = (spec: string): ProviderAdapter => {
+    const enforced = spec === "claude" || spec === "codex";
+    return {
+      name: spec,
+      capabilities: { codeAccess: enforced ? "enforced" : "inherited" },
+      async detect() { return { ok: true }; },
+      async speak() {
+        return {
+          text: `来自 ${spec} 的正文`,
+          sessionRef: makeVerified(spec, `${spec}-session`),
+          tokens: { input: 1, cached: 0, output: 1 },
+        };
+      },
+    };
+  };
+
+  it("inherited + --repo 无覆盖 → 非零且不创建话题", async () => {
+    const code = await cmdNew(
+      ["拒绝不安全自读"],
+      { providers: "opencode,reasonix", repo: root, "max-rounds": "1" },
+      { root, resolveAdapter: resolver },
+    );
+    expect(code).toBe(1);
+    expect(listTopics(root)).toEqual([]);
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("--allow-unsafe-repo"));
+  });
+
+  it("inherited + 显式覆盖 → 创建并保留实验性告警", async () => {
+    const code = await cmdNew(
+      ["接受不安全自读"],
+      {
+        providers: "opencode,reasonix",
+        repo: root,
+        "allow-unsafe-repo": true,
+        "max-rounds": "1",
+      },
+      { root, resolveAdapter: resolver },
+    );
+    expect(code).toBe(0);
+    expect(listTopics(root)).toHaveLength(1);
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("自读为实验特性"));
+  });
+
+  it("全 enforced + --repo → 允许创建,但仍披露 prompt/plugin 非隔离风险", async () => {
+    const code = await cmdNew(
+      ["安全只读仍需披露"],
+      { providers: "claude,codex", repo: root, "max-rounds": "1" },
+      { root, resolveAdapter: resolver },
+    );
+    expect(code).toBe(0);
+    expect(listTopics(root)).toHaveLength(1);
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("各家均强制只读"));
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("项目指令/plugin/hook"));
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("不构成安全隔离"));
+  });
+});
 
 describe("listView (list --json 结构)", () => {
   let root: string;
@@ -42,9 +126,21 @@ describe("listView (list --json 结构)", () => {
     expect(a.participants.map((p) => p.provider)).toEqual(["mock", "claude"]);
     expect(a.participants[0]).toMatchObject({ handle: "mock-1", tokens: { input: 0, cached: 0, output: 0 } });
   });
+
+  it("非 completed 即使磁盘残留旧 outcome 也不向 list 投影", () => {
+    const topic = createTopic(root, {
+      id: "stale-outcome",
+      title: "重开中",
+      mode: "roundtable",
+      maxRounds: 1,
+      participants: [{ handle: "mock-1", provider: "mock:/abs/script.json", perspective: "架构" }],
+    });
+    expect(listView([{ ...topic, status: "active", outcome: "failed" }])[0]!.outcome).toBeUndefined();
+    expect(listView([{ ...topic, status: "cancelled", outcome: "degraded" }])[0]!.outcome).toBeUndefined();
+  });
 });
 
-describe("cmdStop 无 runner 补 summary (#8)", () => {
+describe("cmdStop 无 runner → cancelled + summary (#8/①)", () => {
   let root: string;
   beforeEach(() => {
     root = makeTmpDir();
@@ -55,7 +151,7 @@ describe("cmdStop 无 runner 补 summary (#8)", () => {
     removeDir(root);
   });
 
-  it("active 话题无 runner:置 completed 且写终止 summary", () => {
+  it("active 话题无 runner:置 cancelled 且写终止 summary,engine 不会静默重启", async () => {
     createTopic(root, {
       id: "t",
       title: "x",
@@ -65,14 +161,25 @@ describe("cmdStop 无 runner 补 summary (#8)", () => {
     });
     const dir = path.join(root, "t");
     expect(loadTopic(dir).status).toBe("active");
+    saveTopic(dir, { ...loadTopic(dir), outcome: "failed" }); // 模拟重开后遗留的旧代结果
 
     const code = cmdStop(["t"], {}, { root });
 
     expect(code).toBe(0);
-    expect(loadTopic(dir).status).toBe("completed");
-    // 不再产出无 summary 的伪完成
+    // ①:人工无收尾终止 → cancelled(而非 completed)
+    expect(loadTopic(dir).status).toBe("cancelled");
+    expect(loadTopic(dir).outcome).toBeUndefined();
+    // 仍维持"终态 ⇒ summary 存在"不变量,不产伪完成
     expect(fs.existsSync(path.join(dir, "summary.md"))).toBe(true);
     expect(fs.readFileSync(path.join(dir, "summary.md"), "utf8")).toContain("人工终止");
+    // runTopic API 不得绕过 cmdContinue 的显式重开协议。
+    const unchanged = await runTopic(dir, {
+      installSignalHandlers: false,
+      resolveAdapter: () => { throw new Error("cancelled 不应解析 adapter"); },
+    });
+    expect(unchanged.status).toBe("cancelled");
+    // 显式 transition 后仍可由 continue 重开。
+    expect(transition(loadTopic(dir), "active").status).toBe("active");
   });
 });
 

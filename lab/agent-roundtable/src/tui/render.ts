@@ -85,7 +85,15 @@ export function computeStatusBar(topic: Topic, lockAlive: boolean): StatusView {
     (sum, p) => sum + p.tokens.input + p.tokens.cached + p.tokens.output,
     0,
   );
-  const runner = lockAlive ? "运行中" : topic.status === "completed" ? "已完成" : "未运行";
+  // ①:completed 附结果态(success 不缀);cancelled 显示"已取消"
+  const outcomeSuffix = topic.outcome === "degraded" ? "·降级" : topic.outcome === "failed" ? "·失败" : "";
+  const runner = lockAlive
+    ? "运行中"
+    : topic.status === "completed"
+      ? `已完成${outcomeSuffix}`
+      : topic.status === "cancelled"
+        ? "已取消"
+        : "未运行";
   return {
     title: topic.title,
     mode: topic.mode,

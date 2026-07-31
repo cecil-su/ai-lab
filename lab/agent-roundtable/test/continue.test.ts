@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cmdContinue, cmdNew } from "../src/commands.js";
-import { createTopic, loadTopic } from "../src/store/topic.js";
+import { makeVerified } from "../src/adapters/types.js";
+import { cmdContinue, cmdNew, cmdStop } from "../src/commands.js";
+import { createTopic, loadTopic, saveTopic } from "../src/store/topic.js";
 import { runTopic } from "../src/engine/runner.js";
 import { readTranscript } from "../src/store/transcript.js";
 import { makeTmpDir, removeDir } from "./helpers.js";
@@ -52,6 +53,32 @@ describe("cmdContinue 续谈(R3 方案 B)", () => {
     expect(readTranscript(dir).length).toBe(before); // 未改动
   });
 
+  it("cancelled 可由 cmdContinue 显式重开,并清除伪造的上一代 outcome", async () => {
+    const p1 = writeScript(root, "cancel-a.json", ["A1", "总结A"]);
+    const p2 = writeScript(root, "cancel-b.json", ["B1", "总结B"]);
+    createTopic(root, {
+      id: "cancelled-reopen",
+      title: "取消后续谈",
+      mode: "roundtable",
+      maxRounds: 1,
+      participants: [
+        { handle: "mock-1", provider: p1, perspective: "a" },
+        { handle: "mock-2", provider: p2, perspective: "b" },
+      ],
+    });
+    expect(cmdStop(["cancelled-reopen"], {}, { root })).toBe(0);
+    const dir = path.join(root, "cancelled-reopen");
+    expect(loadTopic(dir).status).toBe("cancelled");
+    saveTopic(dir, { ...loadTopic(dir), outcome: "failed" }); // 模拟旧/坏数据,重开必须清理
+
+    const code = await cmdContinue(["cancelled-reopen"], { ask: "重新开始", more: "1" }, { root });
+    expect(code).toBe(0);
+    const done = loadTopic(dir);
+    expect(done.status).toBe("completed");
+    expect(done.outcome).toBe("success");
+    expect(readTranscript(dir).some((e) => e.kind === "human" && e.body === "重新开始")).toBe(true);
+  });
+
   it("--ask 重开:注入 human 事件、追加新一轮、seq 连续、summary 重生成", async () => {
     const dir = await makeCompletedTopic("with-ask");
     const before = readTranscript(dir);
@@ -75,6 +102,38 @@ describe("cmdContinue 续谈(R3 方案 B)", () => {
     expect(topic.status).toBe("completed");
     // summary 被重生成(内容变化)
     expect(fs.readFileSync(path.join(dir, "summary.md"), "utf8")).not.toBe(summaryBefore);
+  });
+
+  it("重开先清上一代 outcome;新一代暂停时不显示 active/paused·failed", async () => {
+    const dir = await makeCompletedTopic("clear-outcome");
+    saveTopic(dir, { ...loadTopic(dir), outcome: "failed" });
+    let requestedPause = false;
+    const pauseAfterFirstSpeech = (spec: string) => ({
+      name: spec,
+      capabilities: { codeAccess: "inherited" as const },
+      async detect() { return { ok: true }; },
+      async speak() {
+        if (!requestedPause) {
+          requestedPause = true;
+          process.emit("SIGINT");
+        }
+        return {
+          text: "本代先暂停",
+          sessionRef: makeVerified("mock", "new-generation"),
+          tokens: { input: 1, cached: 0, output: 1 },
+        };
+      },
+    });
+
+    const code = await cmdContinue(
+      ["clear-outcome"],
+      { ask: "稍后再试", more: "1" },
+      { root, resolveAdapter: pauseAfterFirstSpeech },
+    );
+    expect(code).toBe(0);
+    const paused = loadTopic(dir);
+    expect(paused.status).toBe("paused");
+    expect(paused.outcome).toBeUndefined();
   });
 
   it("--as 指定插话人名", async () => {
