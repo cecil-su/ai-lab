@@ -1,0 +1,3 @@
+# Build a local AgentParty-compatible main service
+
+We will not depend on the upstream AgentParty Cloudflare Worker as the product's primary main service. The desktop product will target an AgentParty-compatible REST and WebSocket protocol, and we will build a local/private deployable main service that provides the same collaboration semantics without requiring Cloudflare Worker, D1, or Durable Objects. The first deployment target is a team intranet service reachable by IP address, with localhost kept as a development mode. This keeps the desktop client portable while accepting that the server behavior must be reimplemented rather than copied directly from the upstream Worker runtime.
