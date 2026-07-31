@@ -147,3 +147,12 @@ unTopic 启动时对账:transcript 有 commit → 覆盖 topic.json 的 particip
 **测试点**:
 ebuild(无 commit→null、最后一条胜出、error 作废会话+计数)、continue(篡改 topic.json 模拟崩溃窗口 → 重开第一轮拿到 transcript commit 的 ref)。
 
+
+---
+
+## 不变量 9:预算闭环(4 模型裁决项 1) — 调用次数硬上限,轮次边界取消,跨 continue 持久化
+
+**契约**:--max-calls N 是**生命周期**硬上限(	opic.maxCalls),	opic.calls 跨 continue 累计(含 finalize/恢复重跑,全部 speak 经计数包装)。预算用尽只能在**轮次边界**取消(发言前检查,不打断在途调用),落盘 paused 可续;continue --max-calls <更大值> 覆盖上限后续跑。token 不可测:失败调用按下界计,预算语义不承诺 token 封顶。
+
+**测试点**:continue(用尽→paused+calls 落盘+system 事件;未提高→拒绝;提高→恢复剩余轮次+收尾,累计精确)。
+

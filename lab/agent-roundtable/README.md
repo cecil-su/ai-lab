@@ -28,7 +28,7 @@ pnpm -F agent-roundtable doctor           # 自检四家 CLI 的可用性与版�
 
 ### new — 开题并前台运行
 
-`--providers` 至少 2 个(逗号分隔);`--perspectives` 按参与者顺序一一对应(缺省时自动轮流分配内置模板);`--mode` 默认 `roundtable`;`--max-rounds` 默认 3。
+`--providers` 至少 2 个(逗号分隔);`--perspectives` 按参与者顺序一一对应(缺省时自动轮流分配内置模板);`--mode` 默认 `roundtable`;`--max-rounds` 默认 3;`--max-calls <N>` 可选(生命周期调用次数硬上限,用尽在轮次边界暂停,`continue --max-calls <更大值>` 可续跑)。
 
 ```bash
 # 圆桌:claude 与 codex 就缓存选型聊 3 轮(默认模式/轮数)

@@ -174,6 +174,33 @@ export async function runTopic(dir: string, opts: RunOptions = {}): Promise<Topi
     const adapters = new Map<string, ProviderAdapter>();
     for (const p of topic.participants) adapters.set(p.handle, resolve(p.provider));
 
+    // 预算闭环:包装所有 speak(含 finalize/恢复重跑)累计调用次数,
+    // 跨 continue 持久化;预算用尽只允许在轮次边界取消(不打断在途调用),落盘可续。
+    let calls = topic.calls ?? 0;
+    const budgetExhausted = (): boolean => (topic.maxCalls ?? Number.POSITIVE_INFINITY) <= calls;
+    // 预算用尽 → 按暂停路径落盘(可续),不进入收尾/不标 completed
+    const budgetStop = (): void => {
+      if (pauseRequested || endRequested) return;
+      pauseRequested = true;
+      emit(appendEvent(dir, {
+        kind: "system",
+        round: topic.currentRound,
+        body: `⚠ 预算用尽:已达 ${calls}/${topic.maxCalls} 次调用上限,已在轮次边界暂停。` +
+          `可用 continue --max-calls <更大值> 续跑;失败调用的 token 以下界计,不可预测。`,
+      }));
+    };
+    const countingAdapters = new Map<string, ProviderAdapter>();
+    for (const [handle, adapter] of adapters) {
+      countingAdapters.set(handle, {
+        ...adapter,
+        async speak(o) {
+          calls += 1;
+          return adapter.speak(o);
+        },
+      });
+    }
+    const persistBudget = (t: Topic): Topic => ({ ...t, calls });
+
     const charter = fs.existsSync(path.join(dir, CHARTER_FILE))
       ? fs.readFileSync(path.join(dir, CHARTER_FILE), "utf8")
       : `# 话题:${topic.title}`;
@@ -206,9 +233,14 @@ export async function runTopic(dir: string, opts: RunOptions = {}): Promise<Topi
           endRequested = true;
         });
         if (pauseRequested || endRequested) break outer;
+        // 预算闭环:发言前检查,耗尽即轮次边界取消(不浪费本次调用)
+        if (budgetExhausted()) {
+          budgetStop();
+          break outer;
+        }
         if (already.has(participant.handle)) continue;
 
-        const speech = await speakOnce(dir, charter, topic, participant, adapters, round, timeoutMs, emit);
+        const speech = await speakOnce(dir, charter, topic, participant, countingAdapters, round, timeoutMs, emit);
         emit(speech.event);
         // 成功才更新 sessionRef/tokens;失败(F1/F8)作废该参与者会话 → 下轮全量新会话
         if (!speech.failed) {
@@ -247,11 +279,19 @@ export async function runTopic(dir: string, opts: RunOptions = {}): Promise<Topi
     }
 
     if (pauseRequested && !endRequested) {
-      topic = transition(topic, "paused");
+      topic = persistBudget(transition(topic, "paused"));
       saveTopic(dir, topic);
       return topic;
     }
     } // end if (!recovering)
+
+    // 预算在最后一轮发言后才用尽:轮次边界取消,不进入收尾(可续)
+    if (budgetExhausted()) budgetStop();
+    if (pauseRequested && !endRequested) {
+      topic = persistBudget(transition(topic, "paused"));
+      saveTopic(dir, topic);
+      return topic;
+    }
 
     // 末轮 stop 遗留:最后一次发言期间到达的 stop 不会再被循环内 drain 读到,
     // 若不消费会残留在 inbox,续谈首轮 drain 会立即终止新一轮。收尾前 final drain:
@@ -270,7 +310,7 @@ export async function runTopic(dir: string, opts: RunOptions = {}): Promise<Topi
       // 恢复:summary 已产,仅差落终态 → 直接完成,不重跑收尾。
       // HEAD-era 崩溃记录可能没有 outcome;即使有 participant failure 也可能同时 finalize 失败,
       // 无持久化结果无法可靠推导,故保持 unknown,不得臆测 success/degraded。
-      topic = { ...transition(topic, "completed"), finalization: { generation: fin.generation, phase: "done" } };
+      topic = persistBudget({ ...transition(topic, "completed"), finalization: { generation: fin.generation, phase: "done" } });
       saveTopic(dir, topic);
       return topic;
     }
@@ -283,7 +323,7 @@ export async function runTopic(dir: string, opts: RunOptions = {}): Promise<Topi
     // finalize 失败(如裁决人 provider 挂)也要落确定态,不留 active(F1)
     let failedFinalize = false;
     try {
-      topic = await selectMode(topic.mode).finalize({ dir, charter, topic, adapters, converged, timeoutMs, emit });
+      topic = await selectMode(topic.mode).finalize({ dir, charter, topic, adapters: countingAdapters, converged, timeoutMs, emit });
     } catch (err) {
       emit(appendEvent(dir, {
         kind: "error",
@@ -313,9 +353,9 @@ export async function runTopic(dir: string, opts: RunOptions = {}): Promise<Topi
         ? "degraded"
         : "success";
     // summary 已在盘上(正式产出或兜底);推进标记 → 落终态。此后崩溃恢复只需补 completed。
-    topic = { ...topic, outcome, finalization: { generation, phase: "summary-written" } };
+    topic = persistBudget({ ...topic, outcome, finalization: { generation, phase: "summary-written" } });
     saveTopic(dir, topic);
-    topic = { ...transition(topic, "completed"), finalization: { generation, phase: "done" } };
+    topic = persistBudget({ ...transition(topic, "completed"), finalization: { generation, phase: "done" } });
     saveTopic(dir, topic);
     return topic;
   } finally {

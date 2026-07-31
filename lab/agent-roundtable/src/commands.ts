@@ -118,7 +118,7 @@ export async function cmdNew(positional: string[], flags: Flags, ctx: CmdContext
   const adapterResolver = ctx.resolveAdapter ?? resolveAdapter;
   const title = positional[0];
   if (!title) {
-    console.error('用法: roundtable new "<话题>" --providers <a,b,...> [--perspectives ...] [--mode roundtable] [--max-rounds 3] [--model ...] [--context-file a,b] [--context-dir <dir> [--context-glob "*.ts"]] [--repo <代码仓库> [--allow-unsafe-repo]] [--timeout <秒>]');
+    console.error('用法: roundtable new "<话题>" --providers <a,b,...> [--perspectives ...] [--mode roundtable] [--max-rounds 3] [--model ...] [--context-file a,b] [--context-dir <dir> [--context-glob "*.ts"]] [--repo <代码仓库> [--allow-unsafe-repo]] [--max-calls <N>] [--timeout <秒>]');
     return 1;
   }
   const specs = csv(flags.providers);
@@ -134,6 +134,12 @@ export async function cmdNew(positional: string[], flags: Flags, ctx: CmdContext
   const maxRounds = typeof flags["max-rounds"] === "string" ? Number(flags["max-rounds"]) : 3;
   if (!Number.isInteger(maxRounds) || maxRounds < 1) {
     console.error(`--max-rounds 需为正整数,收到: ${String(flags["max-rounds"])}`);
+    return 1;
+  }
+  // 预算闭环(4 模型裁决项 1):生命周期硬上限(调用次数,跨 continue 累计)
+  const maxCalls = typeof flags["max-calls"] === "string" ? Number(flags["max-calls"]) : undefined;
+  if (maxCalls !== undefined && (!Number.isInteger(maxCalls) || maxCalls < 1)) {
+    console.error(`--max-calls 需为正整数,收到: ${String(flags["max-calls"])}`);
     return 1;
   }
   const model = typeof flags.model === "string" ? flags.model : undefined;
@@ -229,7 +235,7 @@ export async function cmdNew(positional: string[], flags: Flags, ctx: CmdContext
       { resumableSession: adapterResumable(spec, adapterResolver) },
     ]),
   );
-  const topic = createTopic(root, { id, title, mode, maxRounds, participants, repo, capabilities });
+  const topic = createTopic(root, { id, title, mode, maxRounds, participants, repo, capabilities, maxCalls });
   const dir = topicDir(root, id);
   fs.writeFileSync(
     path.join(dir, "charter.md"),
@@ -250,6 +256,11 @@ export async function cmdNew(positional: string[], flags: Flags, ctx: CmdContext
   );
 
   console.log(`已开题: ${id}(${participants.length} 位参与者,${mode},最多 ${maxRounds} 轮)`);
+  // 预算闭环:开跑前展示确定性调用次数与实测基线估算(失败以下界计,不可预测)
+  if (maxCalls !== undefined) {
+    const callsEst = participants.length * maxRounds + (mode === "debate" ? 2 : 1);
+    console.log(`预算护栏: 最多 ${maxCalls} 次调用(本轮预计 ${callsEst} 次),用尽将在轮次边界暂停并可续跑`);
+  }
   console.log("前台运行中,Ctrl+C 可在当前发言完成后优雅暂停\n");
   const final = await runTopic(dir, {
     onEvent: (e) => printEvent(e),
@@ -279,6 +290,23 @@ export async function cmdContinue(positional: string[], flags: Flags, ctx: CmdCo
     return 1;
   }
   let topic = loadTopic(dir);
+  // 预算闭环:continue 可覆盖/提高生命周期上限;已用尽且未提高 → 拒绝(防无意识烧钱)
+  const maxCallsFlag = typeof flags["max-calls"] === "string" ? Number(flags["max-calls"]) : undefined;
+  if (maxCallsFlag !== undefined && (!Number.isInteger(maxCallsFlag) || maxCallsFlag < 1)) {
+    console.error(`--max-calls 需为正整数,收到: ${String(flags["max-calls"])}`);
+    return 1;
+  }
+  if (maxCallsFlag !== undefined) {
+    topic = { ...topic, maxCalls: maxCallsFlag };
+    saveTopic(dir, topic); // 立即落盘:runTopic 从磁盘加载,否则覆盖失效(预算继续按旧上限拦截)
+  }
+  if ((topic.maxCalls ?? Number.POSITIVE_INFINITY) <= (topic.calls ?? 0)) {
+    console.error(
+      `话题预算已用尽(${topic.calls}/${topic.maxCalls} 次调用)。` +
+        `可用 continue <topic> --ask ... --max-calls <更大值> 续跑。`,
+    );
+    return 1;
+  }
   if (topic.status === "completed" || topic.status === "cancelled") {
     const terminalLabel = topic.status === "cancelled" ? "已取消" : "已完成";
     // 续谈(方案 B):重开已完成/已取消话题 —— 加轮 + 翻回 active,追问经 inbox 落为 human 事件

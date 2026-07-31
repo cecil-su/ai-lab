@@ -224,6 +224,55 @@ describe("cmdContinue 续谈(R3 方案 B)", () => {
     expect(after.participants[0]!.tokens.input).toBeGreaterThanOrEqual(commitTokens.input);
   });
 
+  it("预算闭环:max-calls 用尽在轮次边界暂停并持久化,可提高上限续跑 (4模型裁决项 1)", async () => {
+    const p1 = writeScript(root, "b-a.json", ["观点A\n【立场】A", "续A\n【立场】A2", "总结A"]);
+    const p2 = writeScript(root, "b-b.json", ["观点B\n【立场】B", "续B\n【立场】B2", "总结B"]);
+    // 2 轮:第 1 轮 2 次发言 + 第 2 轮 mock-1 发言(第 3 次)→ 预算 3 在 mock-2 发言前轮次边界暂停
+    const code = await cmdNew(
+      ["预算暂停"],
+      { providers: `${p1},${p2}`, "max-rounds": "2", "max-calls": "3" },
+      { root },
+    );
+    expect(code).toBe(0);
+    const dir = path.join(root, "2026-07-31-预算暂停");
+    const paused = loadTopic(dir);
+    expect(paused.status).toBe("paused");
+    expect(paused.calls).toBe(3);
+    expect(paused.maxCalls).toBe(3);
+    expect(readTranscript(dir).some((e) => e.kind === "system" && e.body?.includes("预算用尽"))).toBe(true);
+
+    // 预算已尽且未提高 → 拒绝
+    const rejectCode = await cmdContinue(["2026-07-31-预算暂停"], { ask: "继续" }, { root });
+    expect(rejectCode).toBe(1);
+
+    // 提高上限后续跑:恢复第 2 轮剩余发言(mock-2)+ 收尾 = 2 次新调用,累计 5
+    const resumeCode = await cmdContinue(
+      ["2026-07-31-预算暂停"],
+      { ask: "继续深入", "max-calls": "6" },
+      { root },
+    );
+    expect(resumeCode).toBe(0);
+    const done = loadTopic(dir);
+    expect(done.status).toBe("completed");
+    expect(done.calls).toBe(5); // 3 已用 + mock-2 第2轮发言 + 收尾
+    // 第 2 轮确实补上了 mock-2 的发言
+    expect(readTranscript(dir).filter((e) => e.kind === "message" && e.round === 2)).toHaveLength(2);
+  });
+
+  it("预算刚好够 → completed,calls 精确落盘", async () => {
+    const p1 = writeScript(root, "b2-a.json", ["观点A\n【立场】A", "总结A"]);
+    const p2 = writeScript(root, "b2-b.json", ["观点B\n【立场】B", "总结B"]);
+    const code = await cmdNew(
+      ["预算刚好"],
+      { providers: `${p1},${p2}`, "max-rounds": "1", "max-calls": "3" },
+      { root },
+    );
+    expect(code).toBe(0);
+    const done = loadTopic(path.join(root, "2026-07-31-预算刚好"));
+    expect(done.status).toBe("completed");
+    expect(done.calls).toBe(3); // 2 发言 + 1 收尾
+  });
+
   it("--as 指定插话人名", async () => {
     const dir = await makeCompletedTopic("with-as");
     await cmdContinue(["with-as"], { ask: "换个角度", as: "cecil" }, { root });

@@ -41,6 +41,13 @@ export interface Topic {
   /** 续谈水位线(F9):重开时置为当时 lastSeq,prompt 事件下界,挡旧裁决/旧收尾回流 */
   resumeFromSeq?: number;
   /**
+   * 预算闭环(4 模型裁决项 1):生命周期硬上限与累计 provider 调用次数。
+   * 确定性护栏 = 调用次数(轮数×参与者×收尾),token 不可测仅作下界;
+   * 跨 continue 累计,预算用尽落轮次边界取消并保持可续。
+   */
+  maxCalls?: number;
+  calls?: number;
+  /**
    * Phase-3 ②:创建时快照的会话可续性声明(按 handle)。
    * 恢复/续谈决策用持久化声明替代运行期猜测;旧 topic 缺省按真值表推导。
    */
@@ -68,6 +75,8 @@ export interface CreateTopicInput {
   repo?: string;
   /** Phase-3 ②:按 handle 的会话可续性快照(cmdNew 用 adapter 声明填充) */
   capabilities?: Record<string, { resumableSession: boolean }>;
+  /** 预算闭环:生命周期最大 provider 调用次数(缺省无限制) */
+  maxCalls?: number;
 }
 
 const TOPIC_FILE = "topic.json";
@@ -88,6 +97,7 @@ export function createTopic(root: string, input: CreateTopicInput): Topic {
     currentRound: 0,
     createdAt: new Date().toISOString(),
     ...(input.repo ? { repo: input.repo } : {}),
+    ...(input.maxCalls !== undefined ? { maxCalls: input.maxCalls, calls: 0 } : {}),
     // Phase-3 ②:创建即落会话可续性快照(显式声明优先,缺省按真值表),恢复/展示不再运行期猜测
     capabilities: input.capabilities ?? Object.fromEntries(
       input.participants.map((p) => [p.handle, { resumableSession: isResumableProvider(providerBase(p.provider)) }]),
