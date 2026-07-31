@@ -35,36 +35,45 @@ saveTopic(dir, transition(topic, "completed"));
 
 ---
 
-## 不变量 2:走增量续接前必经 `isTrustedRef` 闸门(普通轮与 finalize 一致)
+## 不变量 2:sessionRef 结构化 + 走增量续接前必经 `canResume` 闸门(ADR 0032)
 
-**契约**:任何把 `sessionRef` 传给 adapter 走增量(`--resume`/`-c`)的地方,都要先过 `isTrustedRef(ref)`;不可信则传 `undefined`(全量新会话)。
+**契约**:`sessionRef` 是结构化 `SessionRef {provider,value,trust,resumable}`,**不是裸 string**。归属(provider)与信任(trust/resumable)在**捕获时刻**由 adapter 确定,不在 runner/finalizer 里靠字符串重推。
 
-- `isTrustedRef` = 非空 **且** 不在降级哨兵集合(`DEGRADED_REFS`,含 reasonix `@last`)。抽在 `engine/session-trust.ts`,普通轮(`runner.ts` speakOnce)与 `finalize`(`modes.ts`)共用同一函数,避免两套口径。
-- 收尾失败时,`clearSession(topic, handle)` 作废相关参与者的 ref,避免续谈带着可能失效/被污染的 ref 走增量。
+- 构造子 `makeVerified`/`makeDegraded` 与 `SessionRef` 类型同处 `adapters/types.ts`(下游);策略 `canResume` 与迁移 `fromLegacy` 在 `engine/session-trust.ts`。**adapters 只向下依赖 types,不 import engine**(层级方向)。
+- 任何把 ref 交给 adapter 走增量的地方(普通轮 `runner.ts` speakOnce、`finalize` `modes.ts`)都先过 `canResume(ref)`(= `trust==="verified" && resumable`);不可信传 `undefined`(全量新会话)。**adapter 内不再二次判 trust**——`if (sessionRef)` 即可,信任闸门唯一在 runner。
+- reasonix 捕获:唯一归属 → `makeVerified`,歧义 → `makeDegraded`(#4)。收尾失败 `clearSession` 作废 ref。
+- 磁盘迁移:`topic.json` v1 裸字符串 sessionRef 在 `loadTopic` 一处经 `fromLegacy(providerBase(provider), raw)` 升 v2(`@last`→degraded,其余→verified)。
 
 ### Wrong vs Correct
 
 ```ts
-// ❌ finalize 直传,绕过闸门:ref 可能是 @last → reasonix -c 续错线程
+// ❌ 裸 string,信任散在各处重推;finalize 直传绕过闸门 → reasonix 续错线程
 sessionRef: summarizer.sessionRef ?? undefined,
+// ❌ adapter 内再判一次 trust,与兄弟 adapter 不一致
+if (sessionRef?.resumable) args.push("--resume", sessionRef.value);
 
-// ✅ 与普通轮同一闸门
-sessionRef: isTrustedRef(summarizer.sessionRef) ? summarizer.sessionRef! : undefined,
+// ✅ 结构化 + 统一闸门;adapter 只认 value
+sessionRef: canResume(summarizer.sessionRef) ? summarizer.sessionRef! : undefined,
+if (sessionRef) args.push("--resume", sessionRef.value);
 ```
 
-**测试点**:`finalize-fixes`(@last 被拦下传 undefined;可信 ref 透传)。
+**测试点**:`finalize-fixes`(degraded 拦下传 undefined)、`reasonix-session`(单文件 verified / 歧义 degraded)、`topic`(v1 裸串迁移)、`mock-adapter`/`adapters-parse`(结构化 ref)。
 
-> **Warning**:`engine/session-trust.ts` 独立成模块是为了打破 `runner ↔ modes` 循环 import —— 别把 `isTrustedRef` 放回 runner 再让 modes 反向 import。
+> **Warning**:构造子放 `adapters/types.ts` 是为了让 adapters 自包含、engine 严格向下依赖;别把 `makeVerified` 放回 engine 再让 adapters 反向 import。
 
 ---
 
-## 不变量 3:finalize 崩溃幂等 —— 已有 verdict 不重复裁决
+## 不变量 3:finalize 崩溃幂等 —— `finalization generation` 显式阶段标记(ADR 0030)
 
-**契约**:debate 收尾"append verdict 事件 → 写 summary → 落 completed"之间存在崩溃窗口(verdict 已落盘、status 仍 active)。恢复后重跑 `finalize` 必须先检测 transcript 里本代 verdict(`kind==="verdict"` 且 `round===currentRound+1`),已存在则**据其重建 summary、不再调裁决人**;否则重复/冲突裁决。
+**契约**:收尾横跨多次文件写(append verdict/写 summary/落 completed),中途崩溃会留下分叉态。用 `topic.json` 的 `finalization:{generation,phase}` 把"收尾进度"收敛到**一处显式状态**,使恢复确定而非靠猜:
 
-- 幂等键用 append-only transcript 里的 verdict 事件本身,不额外持久化"finalization 阶段"(lab 代码从简)。
+- runner 收尾:进 finalize 前置 `phase:"pending"`(generation 每次进入收尾自增,续谈按代);summary 落盘后置 `summary-written`;落 completed 时置 `done`。
+- **恢复守卫**:runTopic 入口若 `finalization.phase !== "done"`(且非 completed)→ `recovering=true`,**跳过整个交锋循环**(避免收敛提前结束时重跑轮次),直接进收尾恢复:
+  - `summary-written` → summary 已产,只补 `completed`+`done`,**不重跑收尾**。
+  - `pending` → 沿用本代 generation 重跑 finalize;debate 由 #6 的 verdict 幂等键(transcript 已有本代 verdict 则据其重建、不再调裁决人)保证不二次裁决。
+- fresh 收尾(phase 缺省/`done`)自增新代;`done` 表示上代已完成,续谈重开视作 fresh。
 
-**测试点**:`finalize-fixes`(预置 verdict+active → finalize 不调 adapter、据 verdict 重建;无 verdict → 正常裁决一次)。
+**测试点**:`finalize-fixes`(summary-written→不重跑;pending+verdict→据其重建不二裁;pending 无 verdict→补裁一次;无 finalization→fresh 收尾落 done)。
 
 ---
 

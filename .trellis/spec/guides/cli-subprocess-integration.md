@@ -76,6 +76,10 @@ spawn / stdin / 超时杀进程 / stderr 采集 / 退出码→结构化错误 / 
 > - 用一个 `settled` 单次闸门收敛 timeout / close / fail 三路径,防双 settle;kill 失败也要保证最终 reject 不永挂。
 > - 验证:假 provider fork 一个写心跳的 detached 孙进程,超时后断言心跳停止(锚点 `test/exec-treekill.test.ts`)。
 
+> **Gotcha(输出无界累积 = OOM)**:`stdout += chunk` 无上限时,失控/话痨 provider 能把单进程内存吃爆(本地长会话尤易踩)。
+>
+> **规则**:对 stdout+stderr 累积字节设上限(`MAX_OUTPUT_BYTES`,默认 10MB),`Buffer.byteLength(chunk,"utf8")` 累加(中文多字节);超限即判失控 → 复用同一 `killTree` + `fail()` 路径 reject,`detail.overflow=true` 与 timeout/spawn/exit/流error 区分;超限后停止继续累积。锚点 `adapters/exec.ts`、`test/exec-output-cap.test.ts`。
+
 ---
 
 **Core Principle**: 外部 CLI 的行为以本机实测为准,不以文档/记忆为准——旗标、字段名、安装来源都可能与预期不符。
