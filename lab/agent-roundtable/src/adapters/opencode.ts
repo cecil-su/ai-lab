@@ -1,6 +1,6 @@
 import { detectSimple } from "../doctor.js";
 import { execProvider } from "./exec.js";
-import type { ProviderAdapter, SpeakResult } from "./types.js";
+import { makeVerified, type ProviderAdapter, type SpeakResult } from "./types.js";
 
 // opencode 1.18.9 实测锚点:
 //   新会话  opencode run --format json(prompt 经 stdin,实测跑通)
@@ -53,7 +53,7 @@ export function parseOpencodeEvents(stdout: string): SpeakResult {
   if (textParts.size === 0) throw new Error("opencode 事件流中没有 text 正文");
   return {
     text: [...textParts.values()].join("\n\n"),
-    sessionRef: sessionId,
+    sessionRef: makeVerified("opencode", sessionId),
     tokens: sawTokens ? { input: Math.max(0, input - cached), cached, output } : undefined,
   };
 }
@@ -66,7 +66,7 @@ export const opencodeAdapter: ProviderAdapter = {
 
   async speak({ prompt, sessionRef, model, cwd, timeoutMs }) {
     const args = ["run", "--format", "json"];
-    if (sessionRef) args.push("-s", sessionRef);
+    if (sessionRef) args.push("-s", sessionRef.value);
     if (model) args.push("-m", model);
     const { stdout } = await execProvider({
       provider: "opencode",

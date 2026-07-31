@@ -20,7 +20,7 @@ describe("parseClaudeOutput", () => {
   it("extracts result / session_id / summed usage", () => {
     const r = parseClaudeOutput(sample);
     expect(r.text).toBe("PONG");
-    expect(r.sessionRef).toBe("a0bb6e0a-6503-4ef8-aa77-73a4fa4b76e7");
+    expect(r.sessionRef.value).toBe("a0bb6e0a-6503-4ef8-aa77-73a4fa4b76e7");
     // claude 三桶不相交:input=新增+缓存写,cached=缓存读
     expect(r.tokens).toEqual({ input: 3909, cached: 0, output: 5 });
   });
@@ -72,7 +72,7 @@ describe("parseCodexEvents", () => {
 
   it("captures thread_id, last agent_message, summed usage; tolerates junk lines", () => {
     const r = parseCodexEvents(["banner text", ...lines].join("\n"));
-    expect(r.sessionRef).toBe("019fb097-b487-72b2-906c-d39206456bbe");
+    expect(r.sessionRef.value).toBe("019fb097-b487-72b2-906c-d39206456bbe");
     expect(r.text).toBe("PONG");
     // codex 的 input_tokens 含缓存,拆出 cached 后 input=14675-1920
     expect(r.tokens).toEqual({ input: 12755, cached: 1920, output: 27 });
@@ -106,7 +106,7 @@ describe("parseOpencodeEvents", () => {
 
   it("captures sessionID, joins text parts, sums tokens", () => {
     const r = parseOpencodeEvents(sample);
-    expect(r.sessionRef).toBe(sid);
+    expect(r.sessionRef.value).toBe(sid);
     expect(r.text).toBe("第一段\n\n第二段");
     // opencode 的 part.tokens.input 含缓存读,拆出 cached 后 input=9999-100
     expect(r.tokens).toEqual({ input: 9899, cached: 100, output: 6 });

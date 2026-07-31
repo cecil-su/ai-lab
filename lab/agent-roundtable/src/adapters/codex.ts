@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { detectSimple } from "../doctor.js";
 import { execProvider } from "./exec.js";
-import type { ProviderAdapter, SpeakResult } from "./types.js";
+import { makeVerified, type ProviderAdapter, type SpeakResult } from "./types.js";
 
 // codex 0.145.0 实测锚点:
 //   新会话  codex exec --json -s read-only --skip-git-repo-check -(prompt 经 stdin,`-` 占位)
@@ -58,7 +58,7 @@ export function parseCodexEvents(stdout: string, fallbackText?: string): SpeakRe
     text = fallbackText.trim();
   }
   if (text === undefined) throw new Error("codex 事件流中没有 agent_message");
-  return { text, sessionRef: threadId, tokens };
+  return { text, sessionRef: makeVerified("codex", threadId), tokens };
 }
 
 export const codexAdapter: ProviderAdapter = {
@@ -70,7 +70,7 @@ export const codexAdapter: ProviderAdapter = {
   async speak({ prompt, sessionRef, model, cwd, timeoutMs }) {
     const lastMessageFile = path.join(os.tmpdir(), `roundtable-codex-${crypto.randomUUID()}.txt`);
     const args = sessionRef
-      ? ["exec", "resume", sessionRef, "--json", "--skip-git-repo-check", "-c", 'sandbox_mode="read-only"']
+      ? ["exec", "resume", sessionRef.value, "--json", "--skip-git-repo-check", "-c", 'sandbox_mode="read-only"']
       : ["exec", "--json", "-s", "read-only", "--skip-git-repo-check"];
     if (model) args.push("-m", model);
     args.push("-o", lastMessageFile);

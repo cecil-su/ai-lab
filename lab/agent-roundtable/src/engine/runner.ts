@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveAdapter } from "../adapters/registry.js";
-import type { ProviderAdapter, SpeakResult } from "../adapters/types.js";
+import type { ProviderAdapter, SessionRef, SpeakResult } from "../adapters/types.js";
 import { readInboxRaw, consumedUpTo, markConsumed } from "../store/inbox.js";
 import { acquireLock, releaseLock } from "../store/lock.js";
 import { loadTopic, saveTopic, transition, type Participant, type Topic } from "../store/topic.js";
@@ -12,7 +12,7 @@ import {
 } from "../store/transcript.js";
 import { resolvePerspectiveText } from "./charter.js";
 import { selectMode, writeFallbackSummary } from "./modes.js";
-import { isTrustedRef } from "./session-trust.js";
+import { canResume } from "./session-trust.js";
 import {
   buildDeltaPrompt,
   buildPrompt,
@@ -135,11 +135,16 @@ export async function runTopic(dir: string, opts: RunOptions = {}): Promise<Topi
       }));
     }
 
+    // ③ 恢复:上次收尾未走完(phase≠done)→ 跳过整个交锋循环,直接进收尾恢复,
+    // 避免在已进入收尾后重跑轮次(尤其收敛提前结束时会重复发言)。
+    const recovering = topic.finalization != null && topic.finalization.phase !== "done";
+
+    let converged = false;
+    if (!recovering) {
     const progress = computeProgress(readTranscript(dir));
     // F9:起始轮取 max(已完成轮, currentRound)+1 —— 续谈重开时 currentRound 已推过裁决轮,
     // 避免新交锋轮与旧裁决轮同号(否则 checkConverged 可能立即腰斩追问轮)。
     const startRound = Math.max(progress.completedRounds, topic.currentRound) + 1;
-    let converged = false;
 
     outer: for (let round = startRound; round <= topic.maxRounds; round++) {
       const already = progress.spokenInRound.get(round) ?? new Set<string>();
@@ -194,6 +199,20 @@ export async function runTopic(dir: string, opts: RunOptions = {}): Promise<Topi
       saveTopic(dir, topic);
       return topic;
     }
+    } // end if (!recovering)
+
+    // ③ finalization generation:显式阶段标记使收尾崩溃幂等恢复(ADR 0030;泛化 #6)。
+    const fin = topic.finalization;
+    if (fin?.phase === "summary-written") {
+      // 恢复:summary 已产,仅差落终态 → 直接完成,不重跑收尾
+      topic = { ...transition(topic, "completed"), finalization: { generation: fin.generation, phase: "done" } };
+      saveTopic(dir, topic);
+      return topic;
+    }
+    // FRESH(phase done/缺省)自增新代;RECOVER-INTERRUPTED(phase pending)沿用本代重跑
+    const generation = fin?.phase === "pending" ? fin.generation : (fin?.generation ?? 0) + 1;
+    topic = { ...topic, finalization: { generation, phase: "pending" } };
+    saveTopic(dir, topic);
 
     // 收尾:按模式分派(roundtable=末位总结 / debate=裁决轮)→ summary.md
     // finalize 失败(如裁决人 provider 挂)也要落确定态,不留 active(F1)
@@ -215,7 +234,10 @@ export async function runTopic(dir: string, opts: RunOptions = {}): Promise<Topi
       // #5:收尾失败作废末位总结者的会话引用,避免续谈时带着可能失效/被污染的 ref 走增量
       topic = clearSession(topic, topic.participants[topic.participants.length - 1]!.handle);
     }
-    topic = transition(topic, "completed");
+    // summary 已在盘上(正式产出或兜底);推进标记 → 落终态。此后崩溃恢复只需补 completed。
+    topic = { ...topic, finalization: { generation, phase: "summary-written" } };
+    saveTopic(dir, topic);
+    topic = { ...transition(topic, "completed"), finalization: { generation, phase: "done" } };
     saveTopic(dir, topic);
     return topic;
   } finally {
@@ -252,7 +274,7 @@ function drainInbox(
 
 interface SpeechResult {
   event: TranscriptEvent;
-  sessionRef: string;
+  sessionRef: SessionRef | null;
   tokens: { input: number; cached: number; output: number };
   /** 该参与者本轮失败(已记 error 事件),调用方跳过更新其 sessionRef/tokens 并继续 */
   failed?: boolean;
@@ -272,7 +294,7 @@ async function speakOnce(
   const transcript = readTranscript(dir);
   const self = { handle: participant.handle, perspective: resolvePerspectiveText(participant.perspective) };
   const ownSeq = lastOwnSeq(transcript, participant.handle);
-  const trusted = isTrustedRef(participant.sessionRef);
+  const trusted = canResume(participant.sessionRef);
   // F9:续谈水位线——prompt 事件下界取 max(自身上次发言, resumeFromSeq),挡住旧裁决/旧收尾回流。
   const floor = topic.resumeFromSeq ?? 0;
   // 增量模式(R4b):会话可信续接且此前发过言 → 只发新增;否则全量。
@@ -290,7 +312,7 @@ async function speakOnce(
       emit(appendEvent(dir, {
         kind: "system",
         round,
-        body: `⚠ ${participant.handle} 会话降级(${participant.sessionRef}),本轮改发全量并新建会话以防串会话`,
+        body: `⚠ ${participant.handle} 会话降级(${participant.sessionRef.value}),本轮改发全量并新建会话以防串会话`,
       }));
     }
     const ctx = promptContext(transcript, round, floor);
@@ -307,8 +329,8 @@ async function speakOnce(
   try {
     result = await adapter.speak({
       prompt,
-      // F8:仅在可信时把旧 ref 交给 adapter 续接;降级 ref 传 undefined → 新会话,不再 -c 续错线程
-      sessionRef: trusted ? (participant.sessionRef ?? undefined) : undefined,
+      // F8:仅在可信可续时把旧 ref 交给 adapter 续接;降级 ref 传 undefined → 新会话,不再续错线程
+      sessionRef: trusted ? participant.sessionRef! : undefined,
       model: participant.model ?? undefined,
       cwd: topic.repo ?? dir,
       codeAccess: !!topic.repo,
@@ -317,7 +339,7 @@ async function speakOnce(
   } catch (err) {
     // 单点失败降级(F1)+ F8:记 error 事件,并作废会话(failed → 调用方清空 sessionRef,下轮全量新会话)
     const event = appendEvent(dir, { kind: "error", round, from: participant.handle, body: errText(err) });
-    return { event, sessionRef: "", tokens: participant.tokens, failed: true };
+    return { event, sessionRef: null, tokens: participant.tokens, failed: true };
   }
   const tokens = {
     input: participant.tokens.input + (result.tokens?.input ?? 0),

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { detectReasonix } from "../doctor.js";
 import { execProvider, ProviderExecError } from "./exec.js";
-import type { ProviderAdapter, SpeakResult } from "./types.js";
+import { makeDegraded, makeVerified, type ProviderAdapter, type SessionRef, type SpeakResult } from "./types.js";
 
 // reasonix 1.8.0-rc.1(npm 版)实测锚点:
 //   新会话  reasonix run --max-steps 2 --metrics <tmp>(prompt 经 stdin)
@@ -17,9 +17,6 @@ import type { ProviderAdapter, SpeakResult } from "./types.js";
 // ⚠️ 本机双装坑:PATH 上 scoop 的 reasonix.exe(1.17.21)是错误入口;正确入口是 npm 全局的
 // reasonix.ps1(内部为 node + bin/reasonix.js)。与 doctor.ts 同策略经 pwsh 解析出 ps1,
 // 再直接 spawn node 跑 bin/reasonix.js —— 绕开 pwsh 管道对中文 stdin 的编码转写,超时也能杀准进程。
-
-/** 新会话但未能定位会话文件时的降级 sessionRef:后续用 -c 续接该 cwd 下最近会话 */
-export const REASONIX_LAST_SESSION = "@last";
 
 interface ReasonixCmd {
   cmd: string;
@@ -96,12 +93,12 @@ function listSessionFiles(dir: string): string[] {
 }
 
 /**
- * 在 sessions 目录中定位本次运行新建的会话文件。
- * 只有窗口内恰好新增 1 个文件才能唯一归属本次调用 → 返回其绝对路径(可信,下轮走增量)。
- * 新增 0 个(未定位)或多个(并发同 cwd,差集混入他进程文件)都无法唯一归属 → 降级 @last;
- * runner 的 isTrustedRef 会把 @last 判为不可信 → 下轮全量新会话,不会误续他进程线程(#4)。
+ * 在 sessions 目录中定位本次运行新建的会话文件,返回结构化 SessionRef(ADR 0032)。
+ * 只有窗口内恰好新增 1 个文件才能唯一归属本次调用 → verified(绝对路径,下轮走增量)。
+ * 新增 0 个(未定位)或多个(并发同 cwd,差集混入他进程文件)都无法唯一归属 → degraded;
+ * runner 的 canResume 会把 degraded 判为不可续 → 下轮全量新会话,不会误续他进程线程(#4)。
  */
-export function captureSessionRef(sessionsDir: string, before: Set<string>): string {
+export function captureSessionRef(sessionsDir: string, before: Set<string>): SessionRef {
   const created = listSessionFiles(sessionsDir).filter((f) => !before.has(f));
   if (created.length !== 1) {
     if (created.length > 1) {
@@ -109,9 +106,9 @@ export function captureSessionRef(sessionsDir: string, before: Set<string>): str
         `[reasonix] 运行窗口出现 ${created.length} 个新会话文件(疑似并发同 cwd),无法唯一归属,降级为全量新会话`,
       );
     }
-    return REASONIX_LAST_SESSION;
+    return makeDegraded("reasonix");
   }
-  return path.join(sessionsDir, created[0]!);
+  return makeVerified("reasonix", path.join(sessionsDir, created[0]!));
 }
 
 export const reasonixAdapter: ProviderAdapter = {
@@ -125,8 +122,9 @@ export const reasonixAdapter: ProviderAdapter = {
     const metricsFile = path.join(os.tmpdir(), `roundtable-reasonix-${crypto.randomUUID()}.json`);
     const args = [...baseArgs, "run", "--max-steps", "2", "--metrics", metricsFile];
     if (model) args.push("--model", model);
-    if (sessionRef === REASONIX_LAST_SESSION) args.push("-c");
-    else if (sessionRef) args.push("--resume", sessionRef);
+    // runner 的 canResume 是唯一信任闸门:能到达这里的 ref 必可续(degraded 已被挡在外面),
+    // 故与 codex/opencode 一致按 if (sessionRef) 续接,不在 adapter 再判一次 trust。
+    if (sessionRef) args.push("--resume", sessionRef.value);
 
     const sessionsDir = reasonixSessionsDir(cwd);
     const before = sessionRef ? undefined : new Set(listSessionFiles(sessionsDir));

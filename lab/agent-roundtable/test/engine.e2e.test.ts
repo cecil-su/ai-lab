@@ -6,13 +6,12 @@ import { createTopic, loadTopic } from "../src/store/topic.js";
 import { readTranscript } from "../src/store/transcript.js";
 import { checkConverged, runTopic } from "../src/engine/runner.js";
 import { resolveAdapter } from "../src/adapters/registry.js";
-import { REASONIX_LAST_SESSION } from "../src/adapters/reasonix.js";
-import type { ProviderAdapter } from "../src/adapters/types.js";
+import { makeDegraded, makeVerified, type ProviderAdapter, type SessionRef } from "../src/adapters/types.js";
 import { makeTmpDir, removeDir } from "./helpers.js";
 
 interface SpeakCall {
   spec: string;
-  sessionRef: string | undefined;
+  sessionRef: SessionRef | undefined;
   prompt: string;
   cwd: string;
   codeAccess: boolean | undefined;
@@ -417,7 +416,7 @@ describe("engine e2e (mock providers)", () => {
       async detect() { return { ok: true }; },
       async speak() {
         call++;
-        if (call === 1) return { text: "第一轮\n【立场】a", sessionRef: "real-sid", tokens: { input: 1, cached: 0, output: 1 } };
+        if (call === 1) return { text: "第一轮\n【立场】a", sessionRef: makeVerified("mock", "real-sid"), tokens: { input: 1, cached: 0, output: 1 } };
         throw new Error("第二轮挂了");
       },
     };
@@ -436,7 +435,7 @@ describe("engine e2e (mock providers)", () => {
 
   it("F4①:降级 sessionRef(@last)→ 全量 prompt + 告警,不走增量", async () => {
     const prompts: string[] = [];
-    const refsSeen: (string | undefined)[] = [];
+    const refsSeen: (SessionRef | undefined)[] = [];
     let turn = 0;
     // 模拟 reasonix 降级:每次返回 @last 哨兵
     const degraded: ProviderAdapter = {
@@ -446,7 +445,7 @@ describe("engine e2e (mock providers)", () => {
         prompts.push(o.prompt);
         refsSeen.push(o.sessionRef);
         turn++;
-        return { text: `发言${turn}\n【立场】s${turn}`, sessionRef: REASONIX_LAST_SESSION, tokens: { input: 1, cached: 0, output: 1 } };
+        return { text: `发言${turn}\n【立场】s${turn}`, sessionRef: makeDegraded("reasonix"), tokens: { input: 1, cached: 0, output: 1 } };
       },
     };
     createTopic(root, {

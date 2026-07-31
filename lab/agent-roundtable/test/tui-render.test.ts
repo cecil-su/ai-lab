@@ -103,7 +103,7 @@ describe("renderRows", () => {
 describe("computeStatusBar", () => {
   function topic(over: Partial<Topic> = {}): Topic {
     return {
-      version: 1,
+      version: 2,
       id: "t",
       title: "缓存选型",
       mode: "debate",

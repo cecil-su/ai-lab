@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import type { ProviderAdapter } from "./types.js";
+import { makeVerified, type ProviderAdapter } from "./types.js";
 
 interface MockScript {
   speeches: string[];
@@ -20,14 +20,14 @@ export function createMockAdapter(scriptPath: string): ProviderAdapter {
       if (!Array.isArray(script.speeches) || script.speeches.length === 0) {
         throw new Error(`mock script has no speeches: ${scriptPath}`);
       }
-      const turn = sessionRef === undefined ? 0 : Number(sessionRef);
+      const turn = sessionRef === undefined ? 0 : Number(sessionRef.value);
       if (!Number.isInteger(turn) || turn < 0) {
-        throw new Error(`invalid mock sessionRef: ${String(sessionRef)}`);
+        throw new Error(`invalid mock sessionRef: ${String(sessionRef?.value)}`);
       }
       const text = script.speeches[Math.min(turn, script.speeches.length - 1)]!;
       return {
         text,
-        sessionRef: String(turn + 1),
+        sessionRef: makeVerified("mock", String(turn + 1)),
         tokens: {
           input: Math.ceil(prompt.length / 4),
           cached: 0,

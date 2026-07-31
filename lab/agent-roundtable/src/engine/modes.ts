@@ -11,7 +11,7 @@ import type { Topic, TopicMode } from "../store/topic.js";
 import { appendEvent, readTranscript, type TranscriptEvent } from "../store/transcript.js";
 import { resolvePerspectiveText } from "./charter.js";
 import { buildPrompt, promptContext } from "./prompt.js";
-import { isTrustedRef } from "./session-trust.js";
+import { canResume } from "./session-trust.js";
 
 const SUMMARY_FILE = "summary.md";
 
@@ -52,8 +52,8 @@ const roundtable: ModeStrategy = {
 
     const result = await adapter.speak({
       prompt,
-      // 与普通轮同一信任闸门:降级/不可信 ref(如 @last)不得走增量,否则可能续错线程(#5)
-      sessionRef: isTrustedRef(summarizer.sessionRef) ? summarizer.sessionRef! : undefined,
+      // 与普通轮同一信任闸门:降级/不可信 ref(如 degraded)不得走增量,否则可能续错线程(#5)
+      sessionRef: canResume(summarizer.sessionRef) ? summarizer.sessionRef! : undefined,
       model: summarizer.model ?? undefined,
       cwd: topic.repo ?? dir,
       codeAccess: !!topic.repo,

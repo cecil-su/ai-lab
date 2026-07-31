@@ -45,7 +45,7 @@ async function smokeOne(adapter: ProviderAdapter): Promise<SmokeReport> {
       detail: memoryOk
         ? `第一答=${JSON.stringify(first.text.slice(0, 40))} 第二答=${JSON.stringify(second.text.slice(0, 40))}`
         : `第二答未含 PING1: ${JSON.stringify(second.text.slice(0, 80))}`,
-      sessionRef: first.sessionRef,
+      sessionRef: first.sessionRef.value,
       memoryOk,
       ms: Date.now() - started,
       tokens: `in ${input} / out ${output}`,

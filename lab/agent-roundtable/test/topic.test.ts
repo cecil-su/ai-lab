@@ -29,7 +29,7 @@ describe("topic store", () => {
 
   it("createTopic fills defaults and persists", () => {
     const topic = createTopic(root, INPUT);
-    expect(topic.version).toBe(1);
+    expect(topic.version).toBe(2);
     expect(topic.status).toBe("active");
     expect(topic.currentRound).toBe(0);
     expect(topic.participants[0]).toMatchObject({
@@ -51,6 +51,28 @@ describe("topic store", () => {
     fs.writeFileSync(path.join(dir, "topic.json"), JSON.stringify(legacy));
     const loaded = loadTopic(dir);
     expect(loaded.participants[0]!.tokens).toEqual({ input: 0, cached: 0, output: 0 });
+    void topic;
+  });
+
+  it("loadTopic 迁移 v1 裸字符串 sessionRef → 结构化 SessionRef(ADR 0032)", () => {
+    const topic = createTopic(root, INPUT);
+    const dir = path.join(root, INPUT.id);
+    // 构造旧 v1 数据:version=1,participants[].sessionRef 是裸字符串 / @last
+    const legacy = JSON.parse(fs.readFileSync(path.join(dir, "topic.json"), "utf8"));
+    legacy.version = 1;
+    legacy.participants[0].sessionRef = "sid-123"; // claude:成功会话
+    legacy.participants[1].sessionRef = "@last"; // 降级哨兵
+    fs.writeFileSync(path.join(dir, "topic.json"), JSON.stringify(legacy));
+
+    const loaded = loadTopic(dir);
+    expect(loaded.version).toBe(2); // 惰性升级
+    expect(loaded.participants[0]!.sessionRef).toEqual({
+      provider: "claude",
+      value: "sid-123",
+      trust: "verified",
+      resumable: true,
+    });
+    expect(loaded.participants[1]!.sessionRef).toMatchObject({ trust: "degraded", resumable: false });
     void topic;
   });
 

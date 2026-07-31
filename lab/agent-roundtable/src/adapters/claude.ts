@@ -1,6 +1,6 @@
 import { detectSimple } from "../doctor.js";
 import { execProvider } from "./exec.js";
-import type { ProviderAdapter, SpeakResult } from "./types.js";
+import { makeVerified, type ProviderAdapter, type SpeakResult } from "./types.js";
 
 // claude 2.1.220 实测锚点:
 //   新会话  claude -p --output-format json --tools ""(--tools "" 禁全部工具,讨论不需要且压 token)
@@ -43,7 +43,7 @@ export function parseClaudeOutput(stdout: string): SpeakResult {
   const u = json.usage;
   return {
     text: json.result,
-    sessionRef: json.session_id,
+    sessionRef: makeVerified("claude", json.session_id),
     tokens: u
       ? {
           // input = 本次新处理(新增 + 缓存写,均全额计费);cached = 缓存读(廉价)
@@ -70,7 +70,7 @@ export const claudeAdapter: ProviderAdapter = {
   detect: () => detectSimple("claude", "claude", ["--version"]),
 
   async speak({ prompt, sessionRef, model, cwd, codeAccess, timeoutMs }) {
-    const args = buildClaudeArgs({ model, sessionRef, codeAccess });
+    const args = buildClaudeArgs({ model, sessionRef: sessionRef?.value, codeAccess });
     const { stdout } = await execProvider({
       provider: "claude",
       cmd: "claude",

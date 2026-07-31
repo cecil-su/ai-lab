@@ -15,7 +15,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { render } from "ink";
-import type { ProviderAdapter } from "../src/adapters/types.js";
+import { makeVerified, type ProviderAdapter } from "../src/adapters/types.js";
 import { buildCharter } from "../src/engine/charter.js";
 import { runTopic } from "../src/engine/runner.js";
 import { appendInbox } from "../src/store/inbox.js";
@@ -34,11 +34,11 @@ function slowMock(): ProviderAdapter {
     },
     async speak({ prompt, sessionRef }) {
       await sleep(700);
-      const turn = sessionRef ? Number(sessionRef) : 0;
+      const turn = sessionRef ? Number(sessionRef.value) : 0;
       const text = `第 ${turn + 1} 版观点,持续推进论证。【立场】立场版本-${turn + 1}`;
       return {
         text,
-        sessionRef: String(turn + 1),
+        sessionRef: makeVerified("mock", String(turn + 1)),
         tokens: { input: Math.ceil(prompt.length / 4), output: 20 },
       };
     },
