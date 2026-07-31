@@ -113,6 +113,25 @@ roundtable show <topic> --follow  # 流式跟随新发言(Ctrl+C 退出)
 roundtable show <topic> --json    # 输出 transcript 事件数组
 ```
 
+### verify — 证据引用验证(旁路独立于 summary 生成)
+
+```bash
+roundtable verify <topic>                             # 校验 summary 中 [seq N] 引用可解析(悬空/误引/坏行降级)
+roundtable verify <topic> --expect-hash <sha256>      # 绑定生成时刻 transcript 快照指纹,篡改/重写即失败
+roundtable verify <topic> --json                      # 机器可读报告
+```
+
+### detach — 后台运行
+
+```bash
+roundtable new "<话题>" --providers ... --detach       # 后台跑 runner,父进程立即返回
+roundtable attach <topic>                              # 观察/插话(既有 TUI)
+roundtable list                                        # 查状态
+roundtable stop <topic> / continue <topic>             # 管理(既有)
+```
+
+后台子进程输出落盘话题目录 `run.log`;退出码语义:0=终态、2=paused 可续。
+
 ### stop — 显式结束
 
 ```bash
