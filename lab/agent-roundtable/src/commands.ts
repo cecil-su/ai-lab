@@ -5,6 +5,7 @@ import type { ProviderAdapter } from "./adapters/types.js";
 import { buildCharter, PERSPECTIVE_TEMPLATES } from "./engine/charter.js";
 import { buildContextMaterial, CONTEXT_MAX_BYTES } from "./engine/context.js";
 import { writeFallbackSummary } from "./engine/modes.js";
+import { verifyEvidence } from "./engine/evidence.js";
 import { runTopic } from "./engine/runner.js";
 import { appendInbox } from "./store/inbox.js";
 import { readLock, pidAlive } from "./store/lock.js";
@@ -473,6 +474,36 @@ export async function cmdAttach(positional: string[], flags: Flags, ctx: CmdCont
   const { runAttach } = await import("./tui/attach.js");
   await runAttach(dir, { humanName });
   return 0;
+}
+
+export async function cmdVerify(positional: string[], flags: Flags, ctx: CmdContext = {}): Promise<number> {
+  const root = ctx.root ?? resolveTopicsRoot();
+  const id = positional[0];
+  if (!id) {
+    console.error("用法: roundtable verify <topic> [--expect-hash <sha256>]");
+    return 1;
+  }
+  const dir = topicDir(root, id);
+  if (!fs.existsSync(path.join(dir, "topic.json"))) {
+    console.error(`话题不存在: ${id}`);
+    return 1;
+  }
+  const expectHash = typeof flags["expect-hash"] === "string" ? flags["expect-hash"] : undefined;
+  const report = verifyEvidence(dir, { expectHash });
+  if (flags.json) {
+    console.log(JSON.stringify(report));
+    return report.ok ? 0 : 1;
+  }
+  console.log(`引用验证: ${report.totalRefs} 条 [seq] 引用`);
+  for (const r of report.refs) {
+    const mark = r.status === "ok" ? "✓" : r.status === "dangling" ? "✗ 悬空" : "✗ 误引";
+    console.log(`  ${mark} [seq ${r.seq}] ${r.line}`);
+  }
+  if (report.badLines.length > 0) {
+    console.error(`  ⚠ transcript ${report.badLines.length} 行损坏,引用可能不完整(整体降级)`);
+  }
+  console.log(`快照指纹: ${report.transcriptHash.slice(0, 16)}…${expectHash !== undefined ? (report.hashMatch ? " (与生成时刻一致)" : " (与生成时刻不一致!)") : " (未提供生成时刻值)"}`);
+  return report.ok ? 0 : 1;
 }
 
 export async function cmdShow(positional: string[], flags: Flags, ctx: CmdContext = {}): Promise<number> {
