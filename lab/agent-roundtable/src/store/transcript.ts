@@ -37,7 +37,13 @@ export interface TranscriptEvent {
 
 export type NewTranscriptEvent = Omit<TranscriptEvent, "seq" | "ts"> & { ts?: string };
 
-export function readTranscript(dir: string): TranscriptEvent[] {
+export interface TranscriptRead {
+  events: TranscriptEvent[];
+  /** 损坏行(崩溃残留/字节交错)行号:容错跳过,证据索引据此降级可信度 */
+  badLines: number[];
+}
+
+export function readTranscriptDetailed(dir: string): TranscriptRead {
   const { entries, badLines } = readJsonl<TranscriptEvent>(path.join(dir, TRANSCRIPT_FILE));
   if (badLines.length > 0) {
     // 崩溃残留/字节交错:跳过坏行继续,不让恢复在恢复现场二次崩溃(红队实测点)
@@ -50,7 +56,11 @@ export function readTranscript(dir: string): TranscriptEvent[] {
     }
     prev = event.seq;
   }
-  return entries;
+  return { events: entries, badLines };
+}
+
+export function readTranscript(dir: string): TranscriptEvent[] {
+  return readTranscriptDetailed(dir).events;
 }
 
 export function lastSeq(dir: string): number {
