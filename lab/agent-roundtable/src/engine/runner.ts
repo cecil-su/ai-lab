@@ -297,8 +297,12 @@ export async function runTopic(dir: string, opts: RunOptions = {}): Promise<Topi
         dir,
         `讨论本身已完成,但收尾/裁决环节失败,未能生成正式总结。失败原因:${errText(err)}`,
       );
-      // #5:收尾失败作废末位总结者的会话引用,避免续谈时带着可能失效/被污染的 ref 走增量
-      topic = clearSession(topic, topic.participants[topic.participants.length - 1]!.handle);
+      // #5:收尾失败作废总结者会话引用,避免续谈时带着可能失效/被污染的 ref 走增量。
+      // 仅 roundtable:末位参与者是总结者;debate 的裁决人是临时身份、不并入 participants,
+      // 清末位参与者反而会误伤其真实会话(4 模型 debate 反馈项 2)。
+      if (topic.mode === "roundtable") {
+        topic = clearSession(topic, topic.participants[topic.participants.length - 1]!.handle);
+      }
       failedFinalize = true;
     }
     // ①:结果态与 status 正交 —— finalize 自身失败=failed;否则有参与者失败=degraded,全成=success。

@@ -134,6 +134,40 @@ describe("finalize 信任闸门 + summary 覆盖 (#5)", () => {
     const last = loadTopic(dir).participants.find((p) => p.handle === "mock-2")!;
     expect(last.sessionRef).toBeNull();
   });
+
+  it("debate finalize 失败:不清末位参与者 ref(裁决人是临时身份) (4模型反馈项 2)", async () => {
+    const p1 = writeScript(root, "deb-a.json", ["立论A\n【立场】A", "补A\n【立场】A"]);
+    const p2 = writeScript(root, "deb-b.json", ["立论B\n【立场】B", "补B\n【立场】B"]);
+    createTopic(root, {
+      id: "deb-fail",
+      title: "裁决人挂了",
+      mode: "debate",
+      maxRounds: 1,
+      participants: [
+        { handle: "mock-1", provider: p1, perspective: "正方" },
+        { handle: "mock-2", provider: p2, perspective: "反方" },
+      ],
+    });
+    const dir = path.join(root, "deb-fail");
+    // 先正常跑一轮(参与者获得真实 ref),再让裁决轮(「裁决任务」)抛错
+    const failJudge = (spec: string): ProviderAdapter => {
+      const inner = resolveAdapter(spec);
+      return {
+        ...inner,
+        async speak(o) {
+          if (o.prompt.includes("裁决任务")) throw new Error("裁决 provider 挂了");
+          return inner.speak(o);
+        },
+      };
+    };
+    const topic = await runTopic(dir, { resolveAdapter: failJudge, installSignalHandlers: false });
+    expect(topic.status).toBe("completed");
+    expect(topic.outcome).toBe("failed");
+    const after = loadTopic(dir);
+    // debate 末位参与者(mock-2)是正常辩论者,其会话 ref 必须保留,不能被当作"总结者"误清
+    const p2ref = after.participants.find((p) => p.handle === "mock-2")!.sessionRef;
+    expect(p2ref).not.toBeNull();
+  });
 });
 
 describe("debate finalize 崩溃幂等 (#6)", () => {

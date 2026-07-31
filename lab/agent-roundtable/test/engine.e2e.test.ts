@@ -584,6 +584,49 @@ describe("engine e2e (mock providers)", () => {
     expect(checkConverged(events, 1)).toBe(true);
   });
 
+  // 4 模型 debate 反馈项 1:收敛是节费优化,两条确定性判定断言钉死其语义边界
+  it("checkConverged 判定断言:相同 stance 两轮必触发", () => {
+    const events = readTranscriptFrom([
+      { seq: 1, ts: "", kind: "message", round: 1, from: "a", body: "x", stance: "立场1" },
+      { seq: 2, ts: "", kind: "message", round: 1, from: "b", body: "x", stance: "立场2" },
+      { seq: 3, ts: "", kind: "message", round: 2, from: "a", body: "x", stance: "立场1" },
+      { seq: 4, ts: "", kind: "message", round: 2, from: "b", body: "x", stance: "立场2" },
+    ]);
+    expect(checkConverged(events, 2)).toBe(true);
+  });
+
+  it("checkConverged 判定断言:措辞变化必不触发(概率性收敛不承诺成本安全)", () => {
+    const events = readTranscriptFrom([
+      { seq: 1, ts: "", kind: "message", round: 1, from: "a", body: "x", stance: "立场1" },
+      { seq: 2, ts: "", kind: "message", round: 1, from: "b", body: "x", stance: "立场2" },
+      { seq: 3, ts: "", kind: "message", round: 2, from: "a", body: "x", stance: "立场1 补充说明" },
+      { seq: 4, ts: "", kind: "message", round: 2, from: "b", body: "x", stance: "立场2" },
+    ]);
+    expect(checkConverged(events, 2)).toBe(false);
+  });
+
+  it("mock 故障步骤:首轮注入 fail → error 事件 + failures 计数 + degraded (4模型反馈项 4)", async () => {
+    const p1 = path.join(root, "fault-a.json");
+    fs.writeFileSync(p1, JSON.stringify({ speeches: [{ fail: "模拟 provider 崩了" }, "恢复发言\n【立场】A2"] }));
+    const p2 = writeScript(root, "fault-b.json", ["观点B\n【立场】B", "总结B"]);
+    createTopic(root, {
+      id: "fault",
+      title: "故障注入",
+      mode: "roundtable",
+      maxRounds: 1,
+      participants: [
+        { handle: "mock-1", provider: `mock:${p1}`, perspective: "a" },
+        { handle: "mock-2", provider: p2, perspective: "b" },
+      ],
+    });
+    const dir = path.join(root, "fault");
+    const done = await runTopic(dir, { installSignalHandlers: false });
+    expect(done.status).toBe("completed");
+    expect(done.outcome).toBe("degraded"); // 有失败但收尾成功
+    expect(done.participants.find((p) => p.handle === "mock-1")!.failures).toBe(1);
+    expect(readTranscript(dir).some((e) => e.kind === "error" && e.body?.includes("模拟 provider 崩了"))).toBe(true);
+  });
+
   it("consumes inbox interjections into human events", async () => {
     const p1 = writeScript(root, "h1.json", ["回应插话\n【立场】收到"]);
     createTopic(root, {

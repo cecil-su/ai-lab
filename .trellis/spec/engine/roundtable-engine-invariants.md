@@ -108,6 +108,7 @@ try { fs.writeSync(fd, JSON.stringify(mine)); } finally { fs.closeSync(fd); }
 **契约**:两个轴分开表达,不把结果压进 `completed`:
 - `status: active | paused | completed | cancelled` —— 话题在生命周期的哪。`cancelled` = 人工无收尾终止(`cmdStop` 无 runner);收尾阶段由 `finalization` 标记表达,**不设 `finalizing` status**(Phase-1 ③ 已覆盖)。`completed` 与 `cancelled` 均可 `→active` 续谈重开。
 - `outcome?: success | degraded | failed` —— 结果如何。`success`=正常;`degraded`=有参与者 `failures>0` 但完成;`failed`=finalize 环节自身失败。在 runner 落 `summary-written` 时一并写盘(恢复分支沿用不重算)。`cancelled` 不带 outcome。
+- **语义定义(4 模型 debate 反馈项 3)**:`outcome` 反映**话题生命周期内的失败史**(累计 failures 决定 degraded),不区分本代/全生命周期——简单且可解释;`participants[].failures` 是**全生命周期累计**,仅作 token 计量下界依据(tokensLowerBound),不代表本代失败数。若未来需要代际结果,在 finalization 代际标记上扩展,不重载 outcome。
 - `outcome` **不进 transition 状态机**(两轴正交,避免 4×3 组合爆炸;transition 只校验 status)。
 - 兼容:旧 `completed` 无 outcome 一律保持缺省(unknown),不得臆测 success/degraded。即使 `participants.failures>0`,旧版 finalizer 仍可能同时失败(按新优先级应为 failed),仅凭 topic.json 无法可靠区分。
 - 展示:`render`/`list` 把非 success 的 outcome 缀在 completed 后(如 `已完成·降级` / `completed·failed`)。
@@ -128,9 +129,21 @@ try { fs.writeSync(fd, JSON.stringify(mine)); } finally { fs.closeSync(fd); }
 
 ---
 
+## 不变量 8:收敛熔断是节费优化,不承诺成本安全(4 模型 debate 共识)
+
+**契约**:`checkConverged`(stance 全等判两轮立场不变)只做**提前收尾优化**,不得被当作成本/安全护栏——真实模型措辞几乎不可能逐字复现,概率性收敛不能承担硬 token 封顶承诺。
+
+- 两条确定性判定断言钉死语义边界:相同 stance 两轮 → 必触发;措辞变化 → 必不触发(测试锚定)。
+- 成本安全只能来自确定性护栏(轮数/调用次数上限、预算取消点),失败调用的 token 是**下界**(不可计量区)。
+
+
+---
+
 ## 不变量 7:transcript commit 对账(Phase-3 ①) — 崩溃后 participant 派生字段可重建
 
-**契约**:message/skip/rror(from=参与者)事件携带 commit:{sessionRef,tokens} 累计快照,使 transcript 成为 sessionRef/tokens/failures 的真相源。unTopic 启动时对账:transcript 有 commit → 覆盖 topic.json 的 participant 派生字段(变更才落盘);无 commit(旧数据)→ 保留 checkpoint。failures = 该 handle 的 error 事件数。进度字段(currentRound/resumeFromSeq/finalization/status/outcome)不追溯。
+**契约**:message/skip/rror(from=参与者)事件携带 commit:{sessionRef,tokens} 累计快照,使 transcript 成为 sessionRef/tokens/failures 的真相源。
+unTopic 启动时对账:transcript 有 commit → 覆盖 topic.json 的 participant 派生字段(变更才落盘);无 commit(旧数据)→ 保留 checkpoint。failures = 该 handle 的 error 事件数。进度字段(currentRound/resumeFromSeq/finalization/status/outcome)不追溯。
 
-**测试点**:ebuild(无 commit→null、最后一条胜出、error 作废会话+计数)、continue(篡改 topic.json 模拟崩溃窗口 → 重开第一轮拿到 transcript commit 的 ref)。
+**测试点**:
+ebuild(无 commit→null、最后一条胜出、error 作废会话+计数)、continue(篡改 topic.json 模拟崩溃窗口 → 重开第一轮拿到 transcript commit 的 ref)。
 
