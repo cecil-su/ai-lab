@@ -1,0 +1,3 @@
+{"file": ".trellis/tasks/archive/2026-07/07-29-cross-cli-agent-chat/research/cross-cli-communication-survey.md", "reason": "四终端 headless/续接/MCP/ACP 能力矩阵与实测命令锚点,adapter 实现的事实依据"}
+{"file": ".trellis/tasks/07-29-agent-roundtable-cli/design.md", "reason": "架构、数据契约(topic/transcript/inbox)、adapter 接口、单写者原则、TUI 设计——实现必须遵循"}
+{"file": ".trellis/tasks/07-29-agent-roundtable-cli/implement.md", "reason": "实施顺序与每步验证命令;步骤 4 的 session 捕获降级策略"}

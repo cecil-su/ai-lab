@@ -1,0 +1,2 @@
+{"file": ".trellis/tasks/07-29-agent-roundtable-cli/prd.md", "reason": "验收标准逐条核对的唯一依据;特别注意 C1 独立性约束(不依赖 Trellis/agentparty/外部服务)"}
+{"file": ".trellis/tasks/07-29-agent-roundtable-cli/design.md", "reason": "检查实现是否遵守单写者原则、adapter 契约、安全边界暂停语义与只读会话模式"}

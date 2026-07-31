@@ -1,0 +1,14 @@
+# Represent sessionRef as a structured, trust-tagged type
+
+A participant's `sessionRef` is currently a bare `string` that simultaneously encodes a Claude session id, a Codex thread id, an OpenCode session id, a Reasonix session file path, the `@last` degradation sentinel, and a mock turn counter. What the string does not carry — which provider it belongs to, whether it is trustworthy, whether it may be resumed, and whether it is a verified id or a directory-diff inference — is instead reconstructed by scattered logic across `runner`, the finalizer, and the Reasonix adapter. The 2026-07-30 fixes centralized the trust test into `engine/session-trust.ts` (`isTrustedRef` + a `DEGRADED_REFS` sentinel set), which is the seed of the right model but still operates on an untyped string.
+
+We will make `sessionRef` a structured value: `{ provider, value, trust: "verified" | "degraded", resumable: boolean }`. Trust becomes a property captured at the moment the ref is produced (Reasonix's directory-diff ambiguity is knowable then, not re-derived later), rather than a predicate re-evaluated everywhere. The runner and finalizer stop making ad-hoc `@last`/absolute-path judgments and instead read `trust`/`resumable`; `session-trust.ts` becomes the single place that constructs and validates these values.
+
+We accept the migration cost of threading a struct through the adapters' `SpeakResult`, `topic.json` persistence, and the resume paths. `trust` and `resumable` may look redundant (a degraded ref is generally not resumable), and we keep both deliberately so a provider can express "verified but not resumable" if that ever arises; if it never does, they can be collapsed later. This is a design direction ratified now so the incremental fixes already landed (session-trust module, Reasonix unique-attribution) converge on one model instead of accreting more special cases.
+
+**Schema versioning and migration.** `topic.json` already carries `version: 1`. Because `participants[].sessionRef` changes from `string | null` to `SessionRef | null`, we bump it to `version: 2` and migrate on read, in exactly one place (`loadTopic`), never scattered:
+- `sessionRef === null` → stays `null`.
+- `typeof sessionRef === "string"` → `fromLegacy(participant.provider, str)`: `"@last"` → `{ provider, value: "@last", trust: "degraded", resumable: false }`; any other string → `{ provider, value: str, trust: "verified", resumable: true }` (pre-migration strings were only ever stored on success, so treating them as verified is sound).
+- already an object → passed through.
+
+Migration is lazy (on load) and idempotent; a `version: 1` file is upgraded in memory and re-persisted as `version: 2` on the next `saveTopic`. We do not write a batch migration script — the topic set is small and local, and lazy upgrade covers it. The same one-place-on-read discipline applies to the `outcome` field added in ADR 0031, so schema growth stays confined to the loader.
