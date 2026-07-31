@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { normalizeSpec, providerBase, resolveAdapter, isMockSpec, adapterResumable, isResumableProvider } from "./adapters/registry.js";
+import { normalizeSpec, providerBase, resolveAdapter, isMockSpec, adapterResumable, isResumableProvider, splitModelSpec } from "./adapters/registry.js";
 import type { ProviderAdapter } from "./adapters/types.js";
 import { buildCharter, PERSPECTIVE_TEMPLATES } from "./engine/charter.js";
 import { buildContextMaterial, CONTEXT_MAX_BYTES } from "./engine/context.js";
@@ -145,8 +145,10 @@ export async function cmdNew(positional: string[], flags: Flags, ctx: CmdContext
   const perspectives = csv(flags.perspectives);
   const templateIds = Object.keys(PERSPECTIVE_TEMPLATES);
 
-  // 规范化 provider spec(mock 相对路径转绝对),真实 provider 校验可用性
-  const normalized = specs.map((s) => normalizeSpec(s, process.cwd()));
+  // 规范化 provider spec(mock 相对路径转绝对),真实 provider 校验可用性。
+  // 每参与者模型:`provider@model` 拆出 base+model(spec 内嵌优先于全局 --model)。
+  const parsedSpecs = specs.map((s) => splitModelSpec(s));
+  const normalized = parsedSpecs.map((p) => normalizeSpec(p.base, process.cwd()));
   for (const spec of normalized) {
     if (isMockSpec(spec)) continue;
     const detection = await adapterResolver(spec).detect();
@@ -162,7 +164,7 @@ export async function cmdNew(positional: string[], flags: Flags, ctx: CmdContext
     const n = (baseCounts.get(base) ?? 0) + 1;
     baseCounts.set(base, n);
     const perspective = perspectives[i] ?? templateIds[i % templateIds.length]!;
-    return { handle: `${base}-${n}`, provider: spec, perspective, model };
+    return { handle: `${base}-${n}`, provider: spec, perspective, model: parsedSpecs[i]!.model ?? model };
   });
 
   // 注入参考材料(R1):读文件失败直接中止开题

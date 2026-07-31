@@ -6,7 +6,7 @@ import { resolveAdapter } from "../src/adapters/registry.js";
 import { cmdContinue, cmdNew, cmdStop } from "../src/commands.js";
 import { createTopic, loadTopic, saveTopic } from "../src/store/topic.js";
 import { runTopic } from "../src/engine/runner.js";
-import { readTranscript } from "../src/store/transcript.js";
+import { readTranscript, TRANSCRIPT_FILE } from "../src/store/transcript.js";
 import { makeTmpDir, removeDir } from "./helpers.js";
 
 function writeScript(dir: string, name: string, speeches: string[]): string {
@@ -135,6 +135,38 @@ describe("cmdContinue 续谈(R3 方案 B)", () => {
     const paused = loadTopic(dir);
     expect(paused.status).toBe("paused");
     expect(paused.outcome).toBeUndefined();
+  });
+
+  it("崩溃后半行残留:continue 不二次崩溃,换行护栏隔离后正常续跑", async () => {
+    const p1 = writeScript(root, "crash-a.json", ["观点A\n【立场】A", "续A\n【立场】A2", "总结A"]);
+    const p2 = writeScript(root, "crash-b.json", ["观点B\n【立场】B", "续B\n【立场】B2", "总结B"]);
+    createTopic(root, {
+      id: "crash",
+      title: "崩溃续跑",
+      mode: "roundtable",
+      maxRounds: 1,
+      participants: [
+        { handle: "mock-1", provider: p1, perspective: "a" },
+        { handle: "mock-2", provider: p2, perspective: "b" },
+      ],
+    });
+    const dir = path.join(root, "crash");
+    await runTopic(dir, { installSignalHandlers: false });
+
+    // 模拟崩溃中途写出一行无换行的半 JSON(恢复现场红队场景)
+    const file = path.join(dir, TRANSCRIPT_FILE);
+    fs.appendFileSync(file, '{"seq":999,"kind":"mess');
+
+    // continue 重开:readTranscript 容错 + append 换行护栏 → 不二次崩溃,正常续跑
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const code = await cmdContinue(["crash"], { ask: "继续审查", more: "1" }, { root });
+    expect(code).toBe(0);
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("损坏已跳过"));
+    errSpy.mockRestore();
+    const after = readTranscript(dir);
+    // 新轮发言在坏行之后正常落盘,seq 连续(半行不占 seq)
+    expect(after.filter((e) => e.kind === "message" && e.round > 1).length).toBeGreaterThanOrEqual(2);
+    expect(after.map((e) => e.seq)).toEqual(after.map((_, i) => i + 1));
   });
 
   it("崩溃现场对账:transcript commit 覆盖陈旧 topic.json 的会话/累计 token", async () => {

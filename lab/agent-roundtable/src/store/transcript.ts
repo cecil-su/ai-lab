@@ -38,15 +38,19 @@ export interface TranscriptEvent {
 export type NewTranscriptEvent = Omit<TranscriptEvent, "seq" | "ts"> & { ts?: string };
 
 export function readTranscript(dir: string): TranscriptEvent[] {
-  const events = readJsonl<TranscriptEvent>(path.join(dir, TRANSCRIPT_FILE));
+  const { entries, badLines } = readJsonl<TranscriptEvent>(path.join(dir, TRANSCRIPT_FILE));
+  if (badLines.length > 0) {
+    // 崩溃残留/字节交错:跳过坏行继续,不让恢复在恢复现场二次崩溃(红队实测点)
+    console.error(`[transcript] ${badLines.length} 行损坏已跳过(行号 ${badLines.join(",")}),可能丢失一条事件`);
+  }
   let prev = 0;
-  for (const event of events) {
+  for (const event of entries) {
     if (event.seq <= prev) {
       throw new Error(`transcript corrupted: seq ${event.seq} after ${prev}`);
     }
     prev = event.seq;
   }
-  return events;
+  return entries;
 }
 
 export function lastSeq(dir: string): number {
@@ -100,7 +104,12 @@ export function watchTranscript(
       while ((nl = data.indexOf(0x0a)) !== -1) {
         const line = data.subarray(0, nl).toString("utf8").trim();
         data = data.subarray(nl + 1);
-        if (line !== "") events.push(JSON.parse(line) as TranscriptEvent);
+        if (line === "") continue;
+        try {
+          events.push(JSON.parse(line) as TranscriptEvent);
+        } catch {
+          // 坏行(崩溃残留合并)跳过,不炸掉 TUI 跟随
+        }
       }
       remainder = data;
       if (events.length > 0) onEvents(events);

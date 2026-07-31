@@ -25,7 +25,7 @@ describe("execProvider TERM→KILL 升级 (③)", () => {
         cmd: process.execPath,
         args: [IGNORER, heartbeat],
         cwd: dir,
-        timeoutMs: 300,
+        timeoutMs: 2500, // 给 detached 孙进程留足 node 启动+首次心跳写入的时间(Windows 启动慢)
         killGraceMs: 300, // 短宽限,快速升级到 SIGKILL
       }),
     ).rejects.toThrow(/超时/);
@@ -46,7 +46,7 @@ describe("execProvider TERM→KILL 升级 (③)", () => {
         cmd: process.execPath,
         args: [PARENT_EXITS_CHILD_IGNORES, heartbeat],
         cwd: dir,
-        timeoutMs: 300,
+        timeoutMs: 2500, // 同上:保证孙进程已启动并写过心跳
         killGraceMs: 300,
       }),
     ).rejects.toThrow(/超时/);

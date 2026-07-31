@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   appendEvent,
   readTranscript,
@@ -29,6 +29,40 @@ describe("transcript store", () => {
 
   it("readTranscript returns [] when file missing", () => {
     expect(readTranscript(dir)).toEqual([]);
+  });
+
+  it("崩溃残留半行:appendEvent 换行护栏隔离,不合并成中间坏行", () => {
+    const file = path.join(dir, TRANSCRIPT_FILE);
+    fs.writeFileSync(file, '{"seq":1,"ts":"t","kind":"system","round":0}\n');
+    // 模拟崩溃中途写出一行无换行的半 JSON
+    fs.appendFileSync(file, '{"seq":2,"kind":"mess');
+
+    // 下一次 append 必须从新行开始,半行被隔离为独立坏行(容错跳过)
+    const e = appendEvent(dir, { kind: "message", round: 1, from: "a", body: "恢复后续写" });
+    expect(e.seq).toBe(2);
+    const events = readTranscript(dir);
+    expect(events.map((x) => x.seq)).toEqual([1, 2]);
+    expect(events[1]).toMatchObject({ kind: "message", from: "a", body: "恢复后续写" });
+    // 原始半行仍在文件里(作为坏行),但没有污染新事件
+    const raw = fs.readFileSync(file, "utf8");
+    expect(raw.split("\n").filter((l) => l.trim() !== "")).toHaveLength(3);
+  });
+
+  it("readTranscript 容错:中间坏行跳过并告警,不抛错", () => {
+    const file = path.join(dir, TRANSCRIPT_FILE);
+    fs.writeFileSync(
+      file,
+      [
+        '{"seq":1,"ts":"t","kind":"system","round":0}',
+        "{半截JSON+完整JSON合并的坏行}",
+        '{"seq":2,"ts":"t","kind":"message","round":1,"from":"a","body":"ok"}',
+      ].join("\n") + "\n",
+    );
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const events = readTranscript(dir);
+    expect(events.map((x) => x.seq)).toEqual([1, 2]);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("损坏已跳过"));
+    spy.mockRestore();
   });
 
   it("readTranscript throws on non-increasing seq", () => {

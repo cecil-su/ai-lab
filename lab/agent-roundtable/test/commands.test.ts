@@ -48,6 +48,28 @@ describe("cmdNew --repo capabilities enforcement (②)", () => {
     };
   };
 
+  it("provider@model 每参与者模型:spec 内嵌优先于全局 --model", async () => {
+    const seen: string[] = [];
+    const resolver = (spec: string): ProviderAdapter => ({
+      name: spec,
+      capabilities: { codeAccess: "enforced" },
+      async detect() { return { ok: true }; },
+      async speak(o) {
+        seen.push(`${spec}:${o.model ?? "(none)"}`);
+        return { text: "正文x", sessionRef: makeVerified(spec, "s"), tokens: { input: 1, cached: 0, output: 1 } };
+      },
+    });
+    const code = await cmdNew(
+      ["每参与者模型"],
+      { providers: "claude@m-claude,codex@m-codex,opencode", "max-rounds": "1", model: "m-global" },
+      { root, resolveAdapter: resolver },
+    );
+    expect(code).toBe(0);
+    expect(seen).toContain("claude:m-claude");
+    expect(seen).toContain("codex:m-codex");
+    expect(seen).toContain("opencode:m-global"); // 未内嵌 → 全局 --model
+  });
+
   it("inherited + --repo 无覆盖 → 非零且不创建话题", async () => {
     const code = await cmdNew(
       ["拒绝不安全自读"],

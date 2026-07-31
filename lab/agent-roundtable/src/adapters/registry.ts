@@ -32,6 +32,17 @@ export function providerBase(spec: string): string {
   return isMockSpec(spec) ? "mock" : spec;
 }
 
+/**
+ * 每参与者模型语法:`provider@model`(如 claude@claude-opus-4-8 / reasonix@deepseek/deepseek-v4-flash)。
+ * 仅对非 mock spec 按最后一个 @ 拆分;mock 路径整体保留(路径可能含 @)。
+ */
+export function splitModelSpec(spec: string): { base: string; model?: string } {
+  if (isMockSpec(spec)) return { base: spec };
+  const at = spec.lastIndexOf("@");
+  if (at <= 0 || at === spec.length - 1) return { base: spec };
+  return { base: spec.slice(0, at), model: spec.slice(at + 1) };
+}
+
 /** mock 相对路径转绝对,便于 continue 时从任意 cwd 解析;真实 provider 原样返回 */
 export function normalizeSpec(spec: string, cwd: string): string {
   if (!isMockSpec(spec)) {

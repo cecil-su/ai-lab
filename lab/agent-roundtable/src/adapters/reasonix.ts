@@ -8,11 +8,12 @@ import { execProvider, ProviderExecError } from "./exec.js";
 import { makeDegraded, makeVerified, type ProviderAdapter, type SessionRef, type SpeakResult } from "./types.js";
 
 // reasonix 1.8.0-rc.1(npm 版)实测锚点:
-//   新会话  reasonix run --max-steps 2 --metrics <tmp>(prompt 经 stdin)
+//   新会话  reasonix run --max-steps 8 --metrics <tmp>(prompt 经 stdin)
 //   续接    追加 --resume <会话 jsonl 绝对路径>(续接后追加写同一文件,路径稳定)
 //   会话文件:%APPDATA%/reasonix/projects/<cwd 按 [:\/]→- 转写>/sessions/<ts>-<model>.jsonl
 //   正文:stdout 纯文本,剔除 thinking 标记行 / "· codegraph:" 通知行 / "· N tok ·" 统计尾行
 //   token:--metrics JSON 的 prompt_tokens / completion_tokens
+//   ⚠ --max-steps 2 实测不够(真实任务 2 轮工具调用即被暂停退出码 1),用 8
 //
 // ⚠️ 本机双装坑:PATH 上 scoop 的 reasonix.exe(1.17.21)是错误入口;正确入口是 npm 全局的
 // reasonix.ps1(内部为 node + bin/reasonix.js)。与 doctor.ts 同策略经 pwsh 解析出 ps1,
@@ -120,7 +121,9 @@ export const reasonixAdapter: ProviderAdapter = {
   async speak({ prompt, sessionRef, model, cwd, timeoutMs }) {
     const { cmd, baseArgs } = await resolveReasonixCmd();
     const metricsFile = path.join(os.tmpdir(), `roundtable-reasonix-${crypto.randomUUID()}.json`);
-    const args = [...baseArgs, "run", "--max-steps", "2", "--metrics", metricsFile];
+    // 真机实测:--max-steps 2 会让真实 agent 在 2 轮工具调用后被暂停并以退出码 1 失败
+    // (deepseek-v4-flash 审查任务实测)。8 轮足够普通发言/总结,又不至于失控跑飞。
+    const args = [...baseArgs, "run", "--max-steps", "8", "--metrics", metricsFile];
     if (model) args.push("--model", model);
     // runner 的 canResume 是唯一信任闸门:能到达这里的 ref 必可续(degraded 已被挡在外面),
     // 故与 codex/opencode 一致按 if (sessionRef) 续接,不在 adapter 再判一次 trust。
