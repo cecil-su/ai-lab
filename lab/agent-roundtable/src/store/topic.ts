@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { providerBase } from "../adapters/registry.js";
+import { isResumableProvider, providerBase } from "../adapters/registry.js";
 import type { SessionRef } from "../adapters/types.js";
 import { fromLegacy } from "../engine/session-trust.js";
 import { writeJsonAtomic } from "./jsonl.js";
@@ -41,6 +41,11 @@ export interface Topic {
   /** 续谈水位线(F9):重开时置为当时 lastSeq,prompt 事件下界,挡旧裁决/旧收尾回流 */
   resumeFromSeq?: number;
   /**
+   * Phase-3 ②:创建时快照的会话可续性声明(按 handle)。
+   * 恢复/续谈决策用持久化声明替代运行期猜测;旧 topic 缺省按真值表推导。
+   */
+  capabilities?: Record<string, { resumableSession: boolean }>;
+  /**
    * ③ 收尾代际标记(ADR 0030):把"收尾是否完成"从散落多文件收敛到一处显式状态,
    * 使 finalize 崩溃可幂等恢复。缺省 = 从未进入收尾。generation 每次进入收尾自增(续谈按代)。
    */
@@ -61,6 +66,8 @@ export interface CreateTopicInput {
   maxRounds: number;
   participants: ParticipantInput[];
   repo?: string;
+  /** Phase-3 ②:按 handle 的会话可续性快照(cmdNew 用 adapter 声明填充) */
+  capabilities?: Record<string, { resumableSession: boolean }>;
 }
 
 const TOPIC_FILE = "topic.json";
@@ -81,6 +88,10 @@ export function createTopic(root: string, input: CreateTopicInput): Topic {
     currentRound: 0,
     createdAt: new Date().toISOString(),
     ...(input.repo ? { repo: input.repo } : {}),
+    // Phase-3 ②:创建即落会话可续性快照(显式声明优先,缺省按真值表),恢复/展示不再运行期猜测
+    capabilities: input.capabilities ?? Object.fromEntries(
+      input.participants.map((p) => [p.handle, { resumableSession: isResumableProvider(providerBase(p.provider)) }]),
+    ),
     participants: input.participants.map((p) => ({
       handle: p.handle,
       provider: p.provider,
@@ -114,6 +125,12 @@ export function loadTopic(dir: string): Topic {
   }
   // ①:旧 completed 无 outcome 时一律保持缺省(unknown):即使有参与者 failures,
   // 旧版 finalizer 仍可能同时失败(按新优先级应为 failed),仅凭 topic.json 无法可靠区分。
+  // Phase-3 ②:旧 topic 无 capabilities 快照 → 按 provider base 真值表推导(声明缺失的兜底)。
+  if (raw.capabilities === undefined) {
+    raw.capabilities = Object.fromEntries(
+      raw.participants.map((p) => [p.handle, { resumableSession: isResumableProvider(providerBase(p.provider)) }]),
+    );
+  }
   raw.version = 2; // 惰性升级,下次 saveTopic 落 v2
   return raw;
 }

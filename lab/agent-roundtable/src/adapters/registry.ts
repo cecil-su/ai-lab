@@ -47,3 +47,25 @@ export function resolveAdapter(spec: string): ProviderAdapter {
   if (!adapter) throw new Error(`未知 provider: ${spec}`);
   return adapter;
 }
+
+/**
+ * Phase-3 ② 真值表兜底:provider base 是否声明可稳定续接会话。
+ * 声明优先(adapter.capabilities.resumableSession);旧/未声明按真值表推导
+ * (claude/codex/opencode = provider 显式返回的 id → 可续;reasonix/mock = 推断/计数器 → 不可续)。
+ */
+const RESUMABLE_TRUTH: Record<string, boolean> = {
+  claude: true,
+  codex: true,
+  opencode: true,
+  reasonix: false,
+  mock: false,
+};
+
+export function adapterResumable(spec: string, resolve: (s: string) => ProviderAdapter = resolveAdapter): boolean {
+  const declared = resolve(spec).capabilities?.resumableSession;
+  return declared ?? (RESUMABLE_TRUTH[providerBase(spec)] ?? false);
+}
+
+export function isResumableProvider(base: string): boolean {
+  return RESUMABLE_TRUTH[base] ?? false;
+}

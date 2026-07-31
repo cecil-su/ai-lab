@@ -130,6 +130,42 @@ describe("topic store", () => {
     expect(loadTopic(dir).outcome).toBeUndefined();
   });
 
+  it("createTopic 持久化 capabilities 快照;旧 topic 无快照按真值表推导 (②)", () => {
+    const topic = createTopic(root, {
+      ...INPUT,
+      capabilities: {
+        "claude-architect": { resumableSession: true },
+        "codex-redteam": { resumableSession: true },
+      },
+    });
+    expect(topic.capabilities).toEqual({
+      "claude-architect": { resumableSession: true },
+      "codex-redteam": { resumableSession: true },
+    });
+    // 旧格式:磁盘上删掉 capabilities → 加载时按 provider base 真值表推导
+    const dir = path.join(root, INPUT.id);
+    const raw = JSON.parse(fs.readFileSync(path.join(dir, "topic.json"), "utf8"));
+    delete raw.capabilities;
+    fs.writeFileSync(path.join(dir, "topic.json"), JSON.stringify(raw));
+    const loaded = loadTopic(dir);
+    expect(loaded.capabilities?.["claude-architect"]?.resumableSession).toBe(true);
+    expect(loaded.capabilities?.["codex-redteam"]?.resumableSession).toBe(true);
+    // reasonix/mock 推导为 false
+    const r = createTopic(root, {
+      id: "rx",
+      title: "x",
+      mode: "roundtable",
+      maxRounds: 1,
+      participants: [{ handle: "rx-1", provider: "reasonix", perspective: "a" }],
+    });
+    const rdir = path.join(root, "rx");
+    const rraw = JSON.parse(fs.readFileSync(path.join(rdir, "topic.json"), "utf8"));
+    delete rraw.capabilities;
+    fs.writeFileSync(path.join(rdir, "topic.json"), JSON.stringify(rraw));
+    expect(loadTopic(rdir).capabilities?.["rx-1"]?.resumableSession).toBe(false);
+    void r;
+  });
+
   it("listTopics returns topics and ignores stray dirs", () => {
     createTopic(root, INPUT);
     createTopic(root, { ...INPUT, id: "another-topic" });

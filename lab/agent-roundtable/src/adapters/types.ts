@@ -52,6 +52,10 @@ export interface ProviderAdapter {
    * inherited = 仅换 cwd,依赖该 CLI 自身默认(opencode/reasonix/mock,未强制)。
    * 用于 --repo 时点名不强制只读的 provider。已落地(②):--repo + inherited 默认拒绝创建,
    * 须显式 --allow-unsafe-repo 覆盖(见 commands.ts inheritedProviders / cmdNew)。
+   *
+   * resumableSession(Phase-3 ②):会话标识是否由 provider 显式返回、可跨进程/跨目录稳定续接。
+   * true = claude/codex/opencode(session/thread id);false = reasonix(目录差集推断,
+   * 路径型 ref 不可跨机器)与 mock(计数器)。缺省 false;createTopic 时快照进 topic.json。
    */
-  capabilities?: { codeAccess: "enforced" | "inherited" };
+  capabilities?: { codeAccess: "enforced" | "inherited"; resumableSession?: boolean };
 }

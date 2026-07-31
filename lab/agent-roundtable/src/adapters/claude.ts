@@ -65,7 +65,7 @@ export function buildClaudeArgs(opts: { model?: string; sessionRef?: string; cod
 
 export const claudeAdapter: ProviderAdapter = {
   name: "claude",
-  capabilities: { codeAccess: "enforced" }, // plan + allowedTools 强制只读(已真机核准)
+  capabilities: { codeAccess: "enforced", resumableSession: true }, // plan + allowedTools 强制只读(已真机核准);session_id 可稳定续接
 
   detect: () => detectSimple("claude", "claude", ["--version"]),
 

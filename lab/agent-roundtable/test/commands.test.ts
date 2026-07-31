@@ -125,6 +125,10 @@ describe("listView (list --json 结构)", () => {
     // mock:<path> 的展示基名收敛为 "mock"
     expect(a.participants.map((p) => p.provider)).toEqual(["mock", "claude"]);
     expect(a.participants[0]).toMatchObject({ handle: "mock-1", tokens: { input: 0, cached: 0, output: 0 } });
+    // Phase-3 ②:会话可续性随 topic 快照投影(mock → false)
+    expect(a.participants.map((p) => p.resumableSession)).toEqual([false, true]); // mock / claude
+    const b = views.find((v) => v.id === "2026-07-30-b")!;
+    expect(b.participants[0]!.resumableSession).toBe(true); // codex
   });
 
   it("非 completed 即使磁盘残留旧 outcome 也不向 list 投影", () => {

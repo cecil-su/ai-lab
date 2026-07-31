@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { normalizeSpec, providerBase, resolveAdapter, isMockSpec } from "./adapters/registry.js";
+import { normalizeSpec, providerBase, resolveAdapter, isMockSpec, adapterResumable, isResumableProvider } from "./adapters/registry.js";
 import type { ProviderAdapter } from "./adapters/types.js";
 import { buildCharter, PERSPECTIVE_TEMPLATES } from "./engine/charter.js";
 import { buildContextMaterial, CONTEXT_MAX_BYTES } from "./engine/context.js";
@@ -220,7 +220,14 @@ export async function cmdNew(positional: string[], flags: Flags, ctx: CmdContext
   }
 
   const id = uniqueId(root, slugify(title));
-  const topic = createTopic(root, { id, title, mode, maxRounds, participants, repo });
+  // Phase-3 ②:创建时快照各家会话可续性声明,供恢复/续谈决策与 list --json 消费
+  const capabilities = Object.fromEntries(
+    normalized.map((spec, i) => [
+      participants[i]!.handle,
+      { resumableSession: adapterResumable(spec, adapterResolver) },
+    ]),
+  );
+  const topic = createTopic(root, { id, title, mode, maxRounds, participants, repo, capabilities });
   const dir = topicDir(root, id);
   fs.writeFileSync(
     path.join(dir, "charter.md"),
@@ -372,6 +379,8 @@ export interface TopicView {
     failures: number;
     /** A1:failures>0 时计量为下界(失败调用的 token 无法计入) */
     tokensLowerBound: boolean;
+    /** Phase-3 ②:创建时快照的会话可续性声明 */
+    resumableSession: boolean;
   }[];
 }
 
@@ -389,6 +398,7 @@ export function listView(topics: Topic[]): TopicView[] {
       tokens: p.tokens,
       failures: p.failures,
       tokensLowerBound: p.failures > 0,
+      resumableSession: t.capabilities?.[p.handle]?.resumableSession ?? isResumableProvider(providerBase(p.provider)),
     })),
   }));
 }

@@ -113,7 +113,7 @@ export function captureSessionRef(sessionsDir: string, before: Set<string>): Ses
 
 export const reasonixAdapter: ProviderAdapter = {
   name: "reasonix",
-  capabilities: { codeAccess: "inherited" }, // 仅换 cwd,依赖 reasonix 默认档(未强制只读)
+  capabilities: { codeAccess: "inherited" }, // 仅换 cwd;会话为目录差集推断,不可跨机器续接 → resumableSession 缺省 false
 
   detect: () => detectReasonix(),
 
