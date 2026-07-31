@@ -11,12 +11,17 @@ interface AttachLock {
   startedAt: string;
 }
 
+// 空占坑文件(占坑者刚 openSync、尚未写入 pid)超过此龄视为崩溃残留可清;
+// 与 store/lock.ts 的 EMPTY_LOCK_STALE_MS 同构——不能删刚抢到的锁,否则双 attach 持写锁。
+const EMPTY_LOCK_STALE_MS = 5000;
+
 // 方案①(id 竞争拍板):限单 attach 写入。已有活 attach 持锁 → 本进程只读进入,
 // 保证 inbox.jsonl 的写者始终唯一,不改动现有 inbox 存储与 cursor 语义。
 // 原子占坑(openSync wx / O_EXCL),消除 exists-then-write 的 TOCTOU:并发 attach 至多一个可写。
+// ⚠ 勿复制 store/lock.ts 后丢修复:空占坑让步窗口与坏锁清理必须与 runner 锁同构(红队实测点)。
 function acquireAttachLock(dir: string): boolean {
   const file = path.join(dir, ATTACH_LOCK);
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const fd = fs.openSync(file, "wx");
       try {
@@ -27,11 +32,25 @@ function acquireAttachLock(dir: string): boolean {
       return true;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      let raw: string | null = null;
+      try {
+        raw = fs.readFileSync(file, "utf8");
+      } catch {
+        continue; // 文件刚被释放 → 重试 wx
+      }
+      if (raw.trim() === "") {
+        // 空占坑:占坑者正在写 pid → 让步;仅长期留空(占坑后崩溃)才清理重试
+        if (Date.now() - fs.statSync(file).mtimeMs > EMPTY_LOCK_STALE_MS) {
+          fs.rmSync(file, { force: true });
+          continue;
+        }
+        return false;
+      }
       let held: AttachLock | null = null;
       try {
-        held = JSON.parse(fs.readFileSync(file, "utf8")) as AttachLock;
+        held = JSON.parse(raw) as AttachLock;
       } catch {
-        // 锁文件损坏 → 视为残留
+        // 非空但坏 JSON(字节交错等)→ 视为残留,下方清理重试
       }
       if (held && held.pid !== process.pid && pidAlive(held.pid)) return false;
       if (held && held.pid === process.pid) return true; // 本进程已持有,幂等
