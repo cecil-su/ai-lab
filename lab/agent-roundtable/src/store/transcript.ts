@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { SessionRef } from "../adapters/types.js";
 import { appendJsonl, readJsonl } from "./jsonl.js";
 
 export const TRANSCRIPT_FILE = "transcript.jsonl";
@@ -13,6 +14,16 @@ export type EventKind =
   | "skip"
   | "error";
 
+/**
+ * Phase-3 ① 提交元数据:该次发言(或失败)后参与者的会话/累计 token 状态。
+ * 累计值(非增量),重建时最后一条胜出;message/skip/error(from=参与者)携带,
+ * 使 transcript 可重建 topic.json 的 participant 派生字段。
+ */
+export interface SpeechCommit {
+  sessionRef: SessionRef | null;
+  tokens: { input: number; cached: number; output: number };
+}
+
 export interface TranscriptEvent {
   seq: number;
   ts: string;
@@ -21,6 +32,7 @@ export interface TranscriptEvent {
   from?: string;
   body?: string;
   stance?: string;
+  commit?: SpeechCommit;
 }
 
 export type NewTranscriptEvent = Omit<TranscriptEvent, "seq" | "ts"> & { ts?: string };

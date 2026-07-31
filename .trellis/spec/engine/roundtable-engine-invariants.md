@@ -125,3 +125,12 @@ try { fs.writeSync(fd, JSON.stringify(mine)); } finally { fs.closeSync(fd); }
 ---
 
 **Core Principle**: 终态 / lock / sessionRef / 结果态 都是被全局依赖的凭证与语义——它们的产生必须在并发、超时、崩溃、人工中断下都成立,不能只在 happy path 成立。
+
+---
+
+## 不变量 7:transcript commit 对账(Phase-3 ①) — 崩溃后 participant 派生字段可重建
+
+**契约**:message/skip/rror(from=参与者)事件携带 commit:{sessionRef,tokens} 累计快照,使 transcript 成为 sessionRef/tokens/failures 的真相源。unTopic 启动时对账:transcript 有 commit → 覆盖 topic.json 的 participant 派生字段(变更才落盘);无 commit(旧数据)→ 保留 checkpoint。failures = 该 handle 的 error 事件数。进度字段(currentRound/resumeFromSeq/finalization/status/outcome)不追溯。
+
+**测试点**:ebuild(无 commit→null、最后一条胜出、error 作废会话+计数)、continue(篡改 topic.json 模拟崩溃窗口 → 重开第一轮拿到 transcript commit 的 ref)。
+

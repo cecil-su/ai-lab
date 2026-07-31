@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { makeVerified } from "../src/adapters/types.js";
+import { makeVerified, type ProviderAdapter, type SessionRef } from "../src/adapters/types.js";
+import { resolveAdapter } from "../src/adapters/registry.js";
 import { cmdContinue, cmdNew, cmdStop } from "../src/commands.js";
 import { createTopic, loadTopic, saveTopic } from "../src/store/topic.js";
 import { runTopic } from "../src/engine/runner.js";
@@ -134,6 +135,61 @@ describe("cmdContinue 续谈(R3 方案 B)", () => {
     const paused = loadTopic(dir);
     expect(paused.status).toBe("paused");
     expect(paused.outcome).toBeUndefined();
+  });
+
+  it("崩溃现场对账:transcript commit 覆盖陈旧 topic.json 的会话/累计 token", async () => {
+    const p1 = writeScript(root, "re-a.json", ["观点A\n【立场】A", "续A\n【立场】A2", "总结A"]);
+    const p2 = writeScript(root, "re-b.json", ["观点B\n【立场】B", "续B\n【立场】B2", "总结B"]);
+    createTopic(root, {
+      id: "re",
+      title: "崩溃恢复",
+      mode: "roundtable",
+      maxRounds: 1,
+      participants: [
+        { handle: "mock-1", provider: p1, perspective: "a" },
+        { handle: "mock-2", provider: p2, perspective: "b" },
+      ],
+    });
+    const dir = path.join(root, "re");
+    await runTopic(dir, { installSignalHandlers: false });
+
+    // 记录 transcript 中最后一次 commit 的会话/累计 token(真相源)
+    const done = loadTopic(dir);
+    const commitRef = done.participants[0]!.sessionRef;
+    const commitTokens = done.participants[0]!.tokens;
+    expect(commitRef).not.toBeNull();
+
+    // 模拟"appendEvent 成功、saveTopic 前崩溃":topic.json 仍是陈旧会话/零 token
+    const stale = loadTopic(dir);
+    stale.participants = stale.participants.map((p) =>
+      p.handle === "mock-1"
+        ? { ...p, sessionRef: makeVerified("mock", "STALE"), tokens: { input: 0, cached: 0, output: 0 } }
+        : p,
+    );
+    saveTopic(dir, stale);
+
+    // continue 重开:对账必须先把 mock-1 恢复为 transcript commit 值,再进入新轮发言
+    const seen: (SessionRef | undefined)[] = [];
+    const recording = (spec: string) => {
+      const inner = resolveAdapter(spec);
+      return {
+        ...inner,
+        async speak(o: Parameters<ProviderAdapter["speak"]>[0]) {
+          seen.push(o.sessionRef);
+          return inner.speak(o);
+        },
+      };
+    };
+    const code = await cmdContinue(["re"], { ask: "继续深入", more: "1" }, { root, resolveAdapter: recording });
+    expect(code).toBe(0);
+
+    // 第一轮发言拿到的是 transcript commit 的 ref,而不是陈旧 STALE
+    expect(seen[0]?.value).toBe(commitRef!.value);
+    expect(seen[0]?.value).not.toBe("STALE");
+    // topic.json 已被对账修正:续谈新轮在此基础上推进(不得残留 STALE/零 token)
+    const after = loadTopic(dir);
+    expect(after.participants[0]!.sessionRef?.value).not.toBe("STALE");
+    expect(after.participants[0]!.tokens.input).toBeGreaterThanOrEqual(commitTokens.input);
   });
 
   it("--as 指定插话人名", async () => {

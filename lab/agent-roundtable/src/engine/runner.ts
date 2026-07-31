@@ -8,6 +8,7 @@ import { loadTopic, saveTopic, transition, type Participant, type Topic, type To
 import {
   appendEvent,
   readTranscript,
+  type SpeechCommit,
   type TranscriptEvent,
 } from "../store/transcript.js";
 import { resolvePerspectiveText } from "./charter.js";
@@ -87,6 +88,51 @@ function computeProgress(events: TranscriptEvent[]): Progress {
 }
 
 /**
+ * Phase-3 ①:从 transcript 重放重建某参与者的派生状态(sessionRef/tokens/failures)。
+ * 按 seq 序取最后一个带 commit 的 message/skip/error 事件;failures = 该 handle 的 error 事件数。
+ * 无任何带 commit 的事件(旧数据)→ null,调用方保留 checkpoint 现值。
+ */
+export function rebuildFromTranscript(
+  events: TranscriptEvent[],
+  handle: string,
+): { sessionRef: SessionRef | null; tokens: { input: number; cached: number; output: number }; failures: number } | null {
+  let last: SpeechCommit | undefined;
+  let failures = 0;
+  for (const e of events) {
+    if (e.from !== handle) continue;
+    if (e.kind === "error") failures += 1;
+    if (e.commit !== undefined) last = e.commit;
+  }
+  if (last === undefined) return null;
+  return { sessionRef: last.sessionRef, tokens: last.tokens, failures };
+}
+
+function tokensEqual(
+  a: { input: number; cached: number; output: number },
+  b: { input: number; cached: number; output: number },
+): boolean {
+  return a.input === b.input && a.cached === b.cached && a.output === b.output;
+}
+
+/**
+ * 对账:transcript 有 commit 时,participant 派生字段以 transcript 为准(崩溃恢复),
+ * 变更则落盘一次。无 commit(旧数据)→ 不动。进度字段不追溯。
+ */
+function reconcileTopic(topic: Topic, events: TranscriptEvent[]): { topic: Topic; changed: boolean } {
+  let changed = false;
+  const participants = topic.participants.map((p) => {
+    const rebuilt = rebuildFromTranscript(events, p.handle);
+    if (rebuilt === null) return p;
+    if (rebuilt.sessionRef !== p.sessionRef || !tokensEqual(rebuilt.tokens, p.tokens) || rebuilt.failures !== p.failures) {
+      changed = true;
+      return { ...p, sessionRef: rebuilt.sessionRef, tokens: rebuilt.tokens, failures: rebuilt.failures };
+    }
+    return p;
+  });
+  return changed ? { topic: { ...topic, participants }, changed } : { topic, changed: false };
+}
+
+/**
  * 前台回合循环。持有 runner.lock,单写者 append transcript。
  * 开题(transcript 为空)先补 seq-1 system 事件(design §2 契约);continue 不重复写。
  * 暂停(SIGINT/requestStop):当前发言完成后落盘 status=paused、清锁、优雅退出。
@@ -117,6 +163,11 @@ export async function runTopic(dir: string, opts: RunOptions = {}): Promise<Topi
     let topic = loadTopic(dir);
     // completed/cancelled 都是终态;只有 cmdContinue 显式重开为 active 后才能再次运行。
     if (topic.status === "completed" || topic.status === "cancelled") return topic;
+    // Phase-3 ①:先对账再运行——transcript 有 commit 时 participant 派生字段以 transcript 为准,
+    // 修复"appendEvent 后、saveTopic 前崩溃"的跨文件窗口。
+    const reconciled = reconcileTopic(topic, readTranscript(dir));
+    topic = reconciled.topic;
+    if (reconciled.changed) saveTopic(dir, topic);
     topic = transition(topic, "active");
     saveTopic(dir, topic);
 
@@ -361,7 +412,14 @@ async function speakOnce(
     });
   } catch (err) {
     // 单点失败降级(F1)+ F8:记 error 事件,并作废会话(failed → 调用方清空 sessionRef,下轮全量新会话)
-    const event = appendEvent(dir, { kind: "error", round, from: participant.handle, body: errText(err) });
+    // Phase-3 ①:error 带 commit(sessionRef:null,tokens 累计不变),使崩溃后重建能还原"会话已作废"。
+    const event = appendEvent(dir, {
+      kind: "error",
+      round,
+      from: participant.handle,
+      body: errText(err),
+      commit: { sessionRef: null, tokens: participant.tokens },
+    });
     return { event, sessionRef: null, tokens: participant.tokens, failed: true };
   }
   const tokens = {
@@ -370,13 +428,19 @@ async function speakOnce(
     output: participant.tokens.output + (result.tokens?.output ?? 0),
   };
   const event = isSkip(result.text)
-    ? appendEvent(dir, { kind: "skip", round, from: participant.handle })
+    ? appendEvent(dir, {
+        kind: "skip",
+        round,
+        from: participant.handle,
+        commit: { sessionRef: result.sessionRef, tokens },
+      })
     : appendEvent(dir, {
         kind: "message",
         round,
         from: participant.handle,
         body: result.text,
         ...(extractStance(result.text) ? { stance: extractStance(result.text)! } : {}),
+        commit: { sessionRef: result.sessionRef, tokens },
       });
   return { event, sessionRef: result.sessionRef, tokens };
 }

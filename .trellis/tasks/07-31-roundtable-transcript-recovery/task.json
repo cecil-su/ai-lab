@@ -3,7 +3,7 @@
   "name": "roundtable-transcript-recovery",
   "title": "agent-roundtable: transcript 升为恢复源 / topic.json 降级为 projection (Phase-3 ①)",
   "description": "ADR 0030 第二阶段:transcript 事件携带 session/token 提交元数据,崩溃后据其重建 topic.json",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,
