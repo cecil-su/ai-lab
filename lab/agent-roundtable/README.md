@@ -99,6 +99,7 @@ roundtable attach 2026-07-30-redis-vs-memory --as cecil # 指定插话署名
 进入 Ink TUI:滚动历史(按参与者着色,插话高亮)、状态栏(标题 / 模式 / 轮次 / runner 活跃 / 累计 token)、底部输入框。键位:
 
 - **回车** 发送插话 → 写入 `inbox.jsonl`,runner 在下一轮把它搬进 transcript,所有模型可见
+- **PgUp / PgDn** 回看历史(输入任意字符自动回到底部跟随)
 - **`:stop`** 结束讨论(runner 在安全边界收尾)
 - **q / Esc / Ctrl+C** 仅退出视图,不影响 runner 与话题状态
 

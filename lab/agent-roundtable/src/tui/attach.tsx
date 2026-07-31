@@ -56,7 +56,9 @@ export interface AttachOptions {
 }
 
 export async function runAttach(dir: string, opts: AttachOptions): Promise<void> {
-  const canWrite = acquireAttachLock(dir);
+  // 非 TTY(管道/重定向/日志采集)根本无法输入,不得抢占写锁把真实用户挡在只读外。
+  // isTTY 为 true 才可能支持 raw mode;具体 raw 模式由 App 层启用时再校验。
+  const canWrite = process.stdin.isTTY === true && acquireAttachLock(dir);
   const app = render(<App dir={dir} humanName={opts.humanName} canWrite={canWrite} />);
   try {
     await app.waitUntilExit();
