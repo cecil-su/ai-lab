@@ -19,7 +19,7 @@ export class ProviderExecError extends Error {
   constructor(
     readonly provider: string,
     message: string,
-    readonly detail: { exitCode?: number | null; timedOut?: boolean; stderr?: string } = {},
+    readonly detail: { exitCode?: number | null; timedOut?: boolean; overflow?: boolean; stderr?: string } = {},
   ) {
     const snippet = detail.stderr?.trim().slice(0, 400);
     super(`[${provider}] ${message}${snippet ? `\nstderr: ${snippet}` : ""}`);
@@ -27,7 +27,10 @@ export class ProviderExecError extends Error {
   }
 }
 
-/** 统一子进程执行:prompt 经 stdin 传递(避免 Windows 引号/中文转义),超时杀进程 */
+/** provider 输出累积上限(字节):失控 provider 无界吐字会吃爆内存,超限即判失控杀进程 */
+const DEFAULT_MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
+
+/** 统一子进程执行:prompt 经 stdin 传递(避免 Windows 引号/中文转义),超时/输出超限杀进程 */
 export function execProvider(opts: {
   provider: string;
   cmd: string;
@@ -35,6 +38,7 @@ export function execProvider(opts: {
   cwd: string;
   timeoutMs: number;
   stdin?: string;
+  maxOutputBytes?: number;
 }): Promise<ExecOutput> {
   return new Promise((resolve, reject) => {
     const child = spawn(opts.cmd, opts.args, {
@@ -47,6 +51,8 @@ export function execProvider(opts: {
     let stderr = "";
     let timedOut = false;
     let settled = false;
+    const maxBytes = opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
+    let outBytes = 0;
 
     const timer = setTimeout(() => {
       timedOut = true;
@@ -62,8 +68,18 @@ export function execProvider(opts: {
       void killTree(child.pid).finally(() => reject(err));
     };
 
-    child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
-    child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
+    // 累计 stdout+stderr 字节;超上限判失控 → 杀整树 + overflow 错误,并停止继续累积(防 reject 前继续涨内存)
+    const onChunk = (append: (c: string) => void) => (chunk: string) => {
+      if (settled) return;
+      outBytes += Buffer.byteLength(chunk, "utf8");
+      if (outBytes > maxBytes) {
+        fail(new ProviderExecError(opts.provider, `输出超上限(${maxBytes} 字节),疑似失控,已杀进程`, { overflow: true, stderr }));
+        return;
+      }
+      append(chunk);
+    };
+    child.stdout.setEncoding("utf8").on("data", onChunk((c) => (stdout += c)));
+    child.stderr.setEncoding("utf8").on("data", onChunk((c) => (stderr += c)));
     // stdio 流级 'error'(如 Windows spawn 时 socket read ENOTCONN)必须监听,
     // 否则会作为 unhandled 'error' 事件炸掉整个进程、绕过上层 F1 的 try/catch。
     // stdout 是必要输出,其流错误按启动失败处理;stderr/stdin 非关键,吞掉。
