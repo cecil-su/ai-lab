@@ -1,5 +1,5 @@
 // 四家真实 adapter 集成冒烟:每家两次最小调用(新会话 + 续接),验证记忆延续。
-// ⚠️ 消耗真实 token。用法:pnpm -F agent-roundtable smoke:adapters [-- --only claude,codex]
+// ⚠️ 消耗真实 token。用法:pnpm -F agent-roundtable smoke:adapters [-- --only claude,codex] [-- --model-claude sonnet --model-codex gpt-5.6-sol ...]
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -22,19 +22,20 @@ interface SmokeReport {
   tokens?: string;
 }
 
-async function smokeOne(adapter: ProviderAdapter): Promise<SmokeReport> {
+async function smokeOne(adapter: ProviderAdapter, model?: string): Promise<SmokeReport> {
   const detection = await adapter.detect();
   if (!detection.ok) return { name: adapter.name, status: "skip", detail: "CLI 未检出,跳过" };
 
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), `roundtable-smoke-${adapter.name}-`));
   const started = Date.now();
   try {
-    const first = await adapter.speak({ prompt: "请只回复:PING1", cwd, timeoutMs: TIMEOUT_MS });
+    const first = await adapter.speak({ prompt: "请只回复:PING1", cwd, timeoutMs: TIMEOUT_MS, model });
     const second = await adapter.speak({
       prompt: "你上一条回复了什么?只回答那个词",
       sessionRef: first.sessionRef,
       cwd,
       timeoutMs: TIMEOUT_MS,
+      model,
     });
     const memoryOk = second.text.includes("PING1");
     const input = (first.tokens?.input ?? 0) + (second.tokens?.input ?? 0);
@@ -71,10 +72,17 @@ async function main(): Promise<number> {
     return 1;
   }
 
+  // 每 adapter 模型覆盖:--model-<name> <model>(不传则用各家 CLI 默认)
+  const modelFor = (name: string): string | undefined => {
+    const idx = process.argv.indexOf(`--model-${name}`);
+    return idx >= 0 ? process.argv[idx + 1] : undefined;
+  };
+
   const reports: SmokeReport[] = [];
   for (const adapter of targets) {
-    console.log(`\n=== ${adapter.name} ===`);
-    const report = await smokeOne(adapter);
+    const model = modelFor(adapter.name);
+    console.log(`\n=== ${adapter.name}${model ? ` (model=${model})` : " (默认模型)"} ===`);
+    const report = await smokeOne(adapter, model);
     console.log(`  ${report.status}  ${report.detail}`);
     if (report.sessionRef) console.log(`  sessionRef: ${report.sessionRef}`);
     if (report.ms !== undefined) console.log(`  耗时: ${(report.ms / 1000).toFixed(1)}s  tokens: ${report.tokens ?? "?"}`);
