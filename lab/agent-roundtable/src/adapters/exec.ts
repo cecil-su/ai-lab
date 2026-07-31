@@ -231,6 +231,35 @@ async function killTree(pid: number | undefined, graceMs = KILL_GRACE_MS): Promi
   }
 }
 
+/**
+ * 正常/异常退出后的遗留 daemon 检查(F4):根进程已退,无法再从 root 遍历,
+ * 只能按启动时快照的身份集合复核仍存活的成员,先礼后兵清理并返回告警文本。
+ * ps 查询失败/无快照 → 放弃检查,不阻塞正常返回。POSIX only(Windows 无 ps)。
+ */
+async function cleanupLeftoverTree(
+  snapshot: { root: number; identities: Map<number, string> } | null,
+  graceMs: number,
+): Promise<string> {
+  if (snapshot === null || snapshot.identities.size === 0) return "";
+  try {
+    const survivors = await refreshOwned(snapshot.identities);
+    if (survivors.size === 0) return "";
+    signalOwned(survivors, snapshot.root, "SIGTERM");
+    if (await waitUntilGone(snapshot.identities, graceMs)) {
+      return `⚠ 检测到 ${survivors.size} 个遗留子进程,已优雅清理`;
+    }
+    const remain = await refreshOwned(snapshot.identities);
+    signalOwned(remain, snapshot.root, "SIGKILL");
+    if (await waitUntilGone(snapshot.identities, KILL_CONFIRM_MS)) {
+      return `⚠ 检测到 ${survivors.size} 个遗留子进程,已强杀清理`;
+    }
+    forceCaptured(snapshot.identities);
+    return `⚠ 检测到 ${survivors.size} 个遗留子进程,清理未完全确认`;
+  } catch {
+    return ""; // 查询失败 → 放弃检查
+  }
+}
+
 export interface ExecOutput {
   stdout: string;
   stderr: string;
@@ -281,6 +310,25 @@ export function execProvider(opts: {
     let settled = false;
     const maxBytes = opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
     let outBytes = 0;
+
+    // 启动时后台快照进程树身份:正常退出后用于遗留 daemon 检查(F4)。
+    // 根进程先于快照退出 → 快照为空 → 放弃检查(接受漏检,不阻塞)。
+    let treeSnapshot: { root: number; identities: Map<number, string> } | null = null;
+    if (process.platform !== "win32") {
+      void (async () => {
+        try {
+          const initial = collectInitialTree(await readProcessTable(), child.pid ?? 0);
+          if (initial.size > 0) {
+            treeSnapshot = {
+              root: child.pid ?? 0,
+              identities: new Map([...initial].map(([p, i]) => [p, i.startedAt])),
+            };
+          }
+        } catch {
+          // 快照失败 → 不做遗留检查
+        }
+      })();
+    }
 
     // timeout / overflow / 流错误统一走 fail:先完成有界整树终止,再向调用方 reject。
     // settled 在清理开始时即关闭输出累积与 close 二次结算。
@@ -336,11 +384,16 @@ export function execProvider(opts: {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      if (code !== 0) {
-        reject(new ProviderExecError(opts.provider, `退出码 ${code}`, { exitCode: code, stderr }));
-      } else {
-        resolve({ stdout, stderr });
-      }
+      void (async () => {
+        const note = await cleanupLeftoverTree(treeSnapshot, opts.killGraceMs ?? KILL_GRACE_MS);
+        if (note) console.error(`[${opts.provider}] ${note}`);
+        const withNote = note ? stderr + (stderr ? "\n" : "") + note + "\n" : stderr;
+        if (code !== 0) {
+          reject(new ProviderExecError(opts.provider, `退出码 ${code}`, { exitCode: code, stderr: withNote }));
+        } else {
+          resolve({ stdout, stderr: withNote });
+        }
+      })();
     });
   });
 }

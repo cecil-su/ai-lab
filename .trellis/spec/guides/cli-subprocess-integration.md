@@ -78,6 +78,7 @@ spawn / stdin / 超时杀进程 / stderr 采集 / 退出码→结构化错误 / 
 > - timeout / 流 error / overflow 必须共用同一终止 Promise,在整树退出或有界强杀确认结束后才 reject;不得在“TERM 已发送”时提前 settle。
 > - ⚠ **Windows 限制**:tree-kill 在 win32 恒走 `taskkill /pid /T /F`(强杀,忽略 signal),故 TERM→KILL 优雅期**只在 POSIX 生效**,Windows 仍即时强杀。相关优雅时序测试须 `skipIf(win32)`。
 > - 验证:除根/孙都忽略 TERM 外,必须覆盖“根响应 TERM 退出、detached 孙忽略 TERM”的 reparent 反例,以及 output overflow reject 后心跳已停止(`test/exec-term-kill.test.ts` / `test/exec-output-cap.test.ts`)。
+> - **正常退出遗留检查(F4)**:根进程正常/异常退出后,启动时快照的身份集合若有存活成员 → 先礼后兵清理并在 stderr/console 告警;快照缺失或 ps 失败 → 放弃检查不阻塞返回。POSIX only,`skipIf(win32)`(`test/exec-term-kill.test.ts`)。
 
 > **Gotcha(输出无界累积 = OOM)**:`stdout += chunk` 无上限时,失控/话痨 provider 能把单进程内存吃爆(本地长会话尤易踩)。
 >
