@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { runDoctor } from "./doctor.js";
-import { cmdAttach, cmdContinue, cmdList, cmdNew, cmdShow, cmdStop, cmdVerify, parseArgs } from "./commands.js";
+import { cmdAttach, cmdContinue, cmdList, cmdNew, cmdRunDetached, cmdShow, cmdStop, cmdVerify, parseArgs } from "./commands.js";
 
 const USAGE = `roundtable - 多AI终端话题讨论
 
@@ -38,6 +38,8 @@ async function main(): Promise<number> {
       return cmdShow(positional, flags);
     case "verify":
       return cmdVerify(positional, flags);
+    case "run-detached":
+      return cmdRunDetached(positional, flags);
     case "attach":
       return cmdAttach(positional, flags);
     default:

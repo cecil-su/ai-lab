@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { normalizeSpec, providerBase, resolveAdapter, isMockSpec, adapterResumable, isResumableProvider, splitModelSpec } from "./adapters/registry.js";
 import type { ProviderAdapter } from "./adapters/types.js";
 import { buildCharter, PERSPECTIVE_TEMPLATES } from "./engine/charter.js";
@@ -262,6 +263,13 @@ export async function cmdNew(positional: string[], flags: Flags, ctx: CmdContext
     const callsEst = participants.length * maxRounds + (mode === "debate" ? 2 : 1);
     console.log(`预算护栏: 最多 ${maxCalls} 次调用(本轮预计 ${callsEst} 次),用尽将在轮次边界暂停并可续跑`);
   }
+
+  // detach(Phase-3 ⑤):spawn 后台子进程跑 run-detached,父进程立即返回;
+  // attach/list/stop/continue 均为既有观察与管理面。runner.lock 由子进程持有(跨进程互斥天然生效)。
+  if (flags.detach === true) {
+    return spawnDetached(id, root);
+  }
+
   console.log("前台运行中,Ctrl+C 可在当前发言完成后优雅暂停\n");
   const final = await runTopic(dir, {
     onEvent: (e) => printEvent(e),
@@ -269,6 +277,45 @@ export async function cmdNew(positional: string[], flags: Flags, ctx: CmdContext
     ...(timeoutMs ? { timeoutMs } : {}),
   });
   console.log(`\n话题状态: ${final.status}`);
+  return 0;
+}
+
+/** detach 后台子进程入口(内部命令,不对外宣传):等价前台 runTopic,stdout/stderr 落 run.log */
+export async function cmdRunDetached(positional: string[], _flags: Flags, ctx: CmdContext = {}): Promise<number> {
+  const root = ctx.root ?? resolveTopicsRoot();
+  const id = positional[0];
+  if (!id) {
+    console.error("用法: roundtable run-detached <topic>");
+    return 1;
+  }
+  const dir = topicDir(root, id);
+  if (!fs.existsSync(path.join(dir, "topic.json"))) {
+    console.error(`话题不存在: ${id}`);
+    return 1;
+  }
+  const final = await runTopic(dir, { onEvent: (e) => printEvent(e) });
+  console.log(`\n话题状态: ${final.status}`);
+  // 退出码语义化:0=终态(completed/cancelled),2=paused(可续),1=异常
+  return final.status === "paused" ? 2 : 0;
+}
+
+/** spawn 后台子进程(Windows 友好:detached+unref+windowsHide),输出追加到 run.log */
+export function spawnDetached(id: string, root: string): number {
+  const cliEntry = path.resolve(process.argv[1] ?? "dist/cli.js");
+  // dev 模式(tsx 跑 .ts)子进程需同样经 tsx 引导;构建后直接 node
+  const entryArgs = cliEntry.endsWith(".ts") ? ["--import", "tsx", cliEntry] : [cliEntry];
+  const logPath = path.join(topicDir(root, id), "run.log");
+  const logFd = fs.openSync(logPath, "a");
+  const child = spawn(process.execPath, [...entryArgs, "run-detached", id], {
+    cwd: path.dirname(cliEntry),
+    detached: true,
+    windowsHide: true,
+    stdio: ["ignore", logFd, logFd],
+    env: { ...process.env, ROUNDTABLE_HOME: root },
+  });
+  fs.closeSync(logFd);
+  child.unref();
+  console.log(`已后台启动: ${id}(run.log 记录输出,attach 可观察,stop/continue 可管理)\n`);
   return 0;
 }
 
