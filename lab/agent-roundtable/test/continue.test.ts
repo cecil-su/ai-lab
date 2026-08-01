@@ -9,6 +9,13 @@ import { BudgetExhaustedError, runTopic } from "../src/engine/runner.js";
 import { readTranscript, TRANSCRIPT_FILE } from "../src/store/transcript.js";
 import { makeTmpDir, removeDir } from "./helpers.js";
 
+
+/** 日期前缀跨日变化:按标题后缀取最近话题目录(避免硬编码 2026-07-31 前缀) */
+function latestTopic(root: string, titleSuffix: string): string {
+  const dir = fs.readdirSync(root).find((d) => d.endsWith(titleSuffix));
+  if (!dir) throw new Error(`话题未创建: *${titleSuffix} in ${root}`);
+  return path.join(root, dir);
+}
 function writeScript(dir: string, name: string, speeches: string[]): string {
   const file = path.join(dir, name);
   fs.writeFileSync(file, JSON.stringify({ speeches }));
@@ -234,7 +241,7 @@ describe("cmdContinue 续谈(R3 方案 B)", () => {
       { root },
     );
     expect(code).toBe(0);
-    const dir = path.join(root, "2026-07-31-预算暂停");
+    const dir = latestTopic(root, "预算暂停");
     const paused = loadTopic(dir);
     expect(paused.status).toBe("paused");
     expect(paused.calls).toBe(3);
@@ -242,12 +249,12 @@ describe("cmdContinue 续谈(R3 方案 B)", () => {
     expect(readTranscript(dir).some((e) => e.kind === "system" && e.body?.includes("额度已用尽"))).toBe(true);
 
     // 预算已尽且未提高 → 拒绝
-    const rejectCode = await cmdContinue(["2026-07-31-预算暂停"], { ask: "继续" }, { root });
+    const rejectCode = await cmdContinue([latestTopic(root, "预算暂停").split(path.sep).pop()!], { ask: "继续" }, { root });
     expect(rejectCode).toBe(1);
 
     // 提高上限后续跑:恢复第 2 轮剩余发言(mock-2)+ 收尾 = 2 次新调用,累计 5
     const resumeCode = await cmdContinue(
-      ["2026-07-31-预算暂停"],
+      [latestTopic(root, "预算暂停").split(path.sep).pop()!],
       { ask: "继续深入", "max-calls": "6" },
       { root },
     );
@@ -264,13 +271,13 @@ describe("cmdContinue 续谈(R3 方案 B)", () => {
     const p2 = writeScript(root, "dflt-b.json", ["观点B\n【立场】B", "总结B"]);
     // roundtable:2×1 + 1 + 2 = 5
     await cmdNew(["默认预算"], { providers: `${p1},${p2}`, "max-rounds": "1" }, { root });
-    expect(loadTopic(path.join(root, "2026-07-31-默认预算")).maxCalls).toBe(5);
+    expect(loadTopic(latestTopic(root, "默认预算")).maxCalls).toBe(5);
     // debate:2×1 + 2 + 2 = 6(裁决人是全新会话,收尾=2)
     await cmdNew(["默认预算辩论"], { providers: `${p1},${p2}`, "max-rounds": "1", mode: "debate" }, { root });
-    expect(loadTopic(path.join(root, "2026-07-31-默认预算辩论")).maxCalls).toBe(6);
+    expect(loadTopic(latestTopic(root, "默认预算辩论")).maxCalls).toBe(6);
     // 显式 --max-calls 优先
     await cmdNew(["显式预算"], { providers: `${p1},${p2}`, "max-rounds": "1", "max-calls": "3" }, { root });
-    expect(loadTopic(path.join(root, "2026-07-31-显式预算")).maxCalls).toBe(3);
+    expect(loadTopic(latestTopic(root, "显式预算")).maxCalls).toBe(3);
   });
 
   it("预算刚好够 → completed,calls 精确落盘", async () => {
@@ -282,7 +289,7 @@ describe("cmdContinue 续谈(R3 方案 B)", () => {
       { root },
     );
     expect(code).toBe(0);
-    const done = loadTopic(path.join(root, "2026-07-31-预算刚好"));
+    const done = loadTopic(latestTopic(root, "预算刚好"));
     expect(done.status).toBe("completed");
     expect(done.calls).toBe(3); // 2 发言 + 1 收尾
   });
@@ -296,7 +303,7 @@ describe("cmdContinue 续谈(R3 方案 B)", () => {
       { providers: `${p1},${p2}`, "max-rounds": "2", "max-calls": "3" },
       { root },
     );
-    const dir = path.join(root, "2026-07-31-预算正交");
+    const dir = latestTopic(root, "预算正交");
     const t = loadTopic(dir);
     expect(t.status).toBe("paused");
     expect(t.calls).toBe(3);
@@ -318,7 +325,7 @@ describe("cmdContinue 续谈(R3 方案 B)", () => {
       { providers: `mock:${p1},${p2}`, "max-rounds": "1", "max-calls": "2" },
       { root },
     );
-    const dir = path.join(root, "2026-07-31-预留记账");
+    const dir = latestTopic(root, "预留记账");
     const t = loadTopic(dir);
     expect(t.status).toBe("paused");
     expect(t.calls).toBe(2); // 失败调用也预留,不回退
