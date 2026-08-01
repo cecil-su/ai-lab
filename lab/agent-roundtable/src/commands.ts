@@ -7,6 +7,8 @@ import { buildCharter, PERSPECTIVE_TEMPLATES } from "./engine/charter.js";
 import { buildContextMaterial, CONTEXT_MAX_BYTES } from "./engine/context.js";
 import { writeFallbackSummary } from "./engine/modes.js";
 import { verifyEvidence } from "./engine/evidence.js";
+import { auditSummary } from "./engine/audit.js";
+import { estimateTokenRange, formatTokenRange } from "./engine/cost.js";
 import { runTopic } from "./engine/runner.js";
 import { appendInbox } from "./store/inbox.js";
 import { readLock, pidAlive } from "./store/lock.js";
@@ -266,6 +268,8 @@ export async function cmdNew(positional: string[], flags: Flags, ctx: CmdContext
   {
     const callsEst = participants.length * maxRounds + finalizeCalls;
     console.log(`预算护栏: 最多 ${effectiveMaxCalls} 次调用(本轮预计 ${callsEst} 次${maxCalls === undefined ? ",默认含余量 2" : ""}),用尽将在轮次边界暂停并可续跑`);
+    // 成本预告(体验 A):基于实测基线的 token 区间,失败以下界计
+    console.log(formatTokenRange(estimateTokenRange(participants.map((p) => providerBase(p.provider)), maxRounds, finalizeCalls)));
   }
 
   // detach(Phase-3 ⑤):spawn 后台子进程跑 run-detached,父进程立即返回;
@@ -454,6 +458,12 @@ export interface TopicView {
   /** ①:结果态,与 status 正交;旧 completed 缺省表示 unknown */
   outcome?: Topic["outcome"];
   round: { current: number; max: number };
+  /** 预算闭环:累计调用/上限(未设上限时省略) */
+  calls?: number;
+  maxCalls?: number;
+  /** 终审④:证据绑定(生成时刻指纹+代际),verify 依赖 */
+  evidenceBound: boolean;
+  evidenceGeneration?: number;
   participants: {
     handle: string;
     provider: string;
@@ -473,6 +483,10 @@ export function listView(topics: Topic[]): TopicView[] {
     mode: t.mode,
     status: t.status,
     ...(t.status === "completed" && t.outcome ? { outcome: t.outcome } : {}),
+    ...(t.calls !== undefined ? { calls: t.calls } : {}),
+    ...(t.maxCalls !== undefined ? { maxCalls: t.maxCalls } : {}),
+    evidenceBound: t.summaryEvidence !== undefined,
+    ...(t.summaryEvidence ? { evidenceGeneration: t.summaryEvidence.generation } : {}),
     round: { current: t.currentRound, max: t.maxRounds },
     participants: t.participants.map((p) => ({
       handle: p.handle,
@@ -501,8 +515,12 @@ export function cmdList(_positional: string[], flags: Flags, ctx: CmdContext = {
     const statusCol = v.status === "completed" && v.outcome && v.outcome !== "success"
       ? `${v.status}·${v.outcome}`
       : v.status;
+    const budget = v.maxCalls !== undefined ? ` calls=${v.calls ?? 0}/${v.maxCalls}` : "";
+    const evidence = v.status === "completed"
+      ? (v.evidenceBound ? " 证据✓" : " 证据✗")
+      : "";
     console.log(
-      `${v.id.padEnd(28)} ${statusCol.padEnd(18)} ${v.mode.padEnd(11)} ${v.round.current}/${v.round.max} 轮  ${v.title}`,
+      `${v.id.padEnd(28)} ${statusCol.padEnd(18)} ${v.mode.padEnd(11)} ${v.round.current}/${v.round.max} 轮${budget}${evidence}  ${v.title}`,
     );
   }
   return 0;
@@ -553,21 +571,74 @@ export async function cmdVerify(positional: string[], flags: Flags, ctx: CmdCont
   if (report.badLines.length > 0) {
     console.error(`  ⚠ transcript ${report.badLines.length} 行损坏,引用可能不完整(整体降级)`);
   }
-  console.log(`快照指纹: ${report.transcriptHash.slice(0, 16)}…${expectHash !== undefined ? (report.hashMatch ? " (与生成时刻一致)" : " (与生成时刻不一致!)") : " (未提供生成时刻值)"}`);
+  // 体验 B:绑定信息(引擎元数据 or 显式 expectHash)
+  const meta = (() => { try { return loadTopic(dir).summaryEvidence; } catch { return undefined; } })();
+  const bound = expectHash ?? meta?.transcriptHash;
+  console.log(
+    `快照指纹: ${report.transcriptHash.slice(0, 16)}…` +
+      (bound === undefined
+        ? " (无生成时刻绑定,不可验证)"
+        : report.hashMatch
+          ? ` (与生成时刻一致${meta ? `,gen=${meta.generation}` : ""})`
+          : " (与生成时刻不一致!)"),
+  );
   return report.ok ? 0 : 1;
 }
 
-export async function cmdShow(positional: string[], flags: Flags, ctx: CmdContext = {}): Promise<number> {
+export async function cmdAudit(positional: string[], flags: Flags, ctx: CmdContext = {}): Promise<number> {
   const root = ctx.root ?? resolveTopicsRoot();
   const id = positional[0];
   if (!id) {
-    console.error("用法: roundtable show <topic> [--follow] [--json]");
+    console.error("用法: roundtable audit <topic> [--provider <spec>](默认 reasonix flash;消耗真实 token)");
     return 1;
   }
   const dir = topicDir(root, id);
   if (!fs.existsSync(path.join(dir, "topic.json"))) {
     console.error(`话题不存在: ${id}`);
     return 1;
+  }
+  const providerSpec = typeof flags.provider === "string" ? flags.provider : undefined;
+  const report = await auditSummary(dir, { providerSpec });
+  if (flags.json) {
+    console.log(JSON.stringify(report));
+    return report.ok ? 0 : 1;
+  }
+  if (!report.ok) {
+    console.error(`语义抽检失败: ${report.error ?? "未知"}`);
+    return 1;
+  }
+  console.log(`语义抽检(${report.provider}): ${report.items.length} 条结论`);
+  for (const item of report.items) {
+    const mark = item.verdict === "support" ? "✓" : item.verdict === "doubt" ? "?" : "✗";
+    console.log(`  ${mark} [${item.verdict}] ${item.claim}`);
+    if (item.reason) console.log(`       ${item.reason}`);
+  }
+  const unsupported = report.items.filter((i) => i.verdict === "unsupported");
+  console.log(`\n结论: ${unsupported.length > 0 ? `${unsupported.length} 条无支撑,建议人工复核` : "全部结论均有证据支撑"}`);
+  return 0;
+}
+
+export async function cmdShow(positional: string[], flags: Flags, ctx: CmdContext = {}): Promise<number> {
+  const root = ctx.root ?? resolveTopicsRoot();
+  const id = positional[0];
+  if (!id) {
+    console.error("用法: roundtable show <topic> [--follow] [--json] [--summary]");
+    return 1;
+  }
+  const dir = topicDir(root, id);
+  if (!fs.existsSync(path.join(dir, "topic.json"))) {
+    console.error(`话题不存在: ${id}`);
+    return 1;
+  }
+  // 体验 B:--summary 直接查看结论产物(无需手动读文件)
+  if (flags.summary === true) {
+    const summaryFile = path.join(dir, "summary.md");
+    if (!fs.existsSync(summaryFile)) {
+      console.error(`话题尚无 summary.md(未完成或已取消): ${id}`);
+      return 1;
+    }
+    console.log(fs.readFileSync(summaryFile, "utf8").trimEnd());
+    return 0;
   }
   const events = readTranscript(dir);
   if (flags.json) {
