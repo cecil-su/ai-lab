@@ -1,0 +1,9 @@
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Review must verify there is one source of truth after graduating the prototype."}
+{"file":".trellis/tasks/08-01-pi-web-search/research/pi-extension-architecture.md","reason":"Review must enforce Pi compatibility, cancellation, JSON safety, bounds, attribution, and smoke-test requirements."}
+{"file":".trellis/tasks/08-01-pi-web-search/research/planning-review.md","reason":"Review must re-check whole-tool deadlines, locale behavior, literal lang tokens, fixed MVP scope, and secret-safe errors."}
+{"file":".trellis/tasks/08-01-pi-web-search/research/brave-api-usage.md","reason":"Review must confirm only ordinary Brave web results are consumed and provider diagnostics do not imply partnership."}
+{"file":".trellis/tasks/08-01-pi-web-search/research/final-plan-review.md","reason":"Review must verify the three final planning blockers stayed resolved: package-root smoke, exact Pi pins, and Brave attribution scope."}
+{"file":".trellis/tasks/08-01-pi-web-search/research/final-plan-recheck.md","reason":"Independent recheck confirms the corrected planning artifacts pass the final three-blocker gate."}
+{"file":".trellis/tasks/08-01-pi-web-search/research/implementation-handoff.md","reason":"Final check must confirm delivered paths, commands, non-run manual checks, and residual risks."}
+{"file":".trellis/tasks/08-01-pi-web-search/research/implementation-review.md","reason":"Single comprehensive implementation reviewer recheck passed after cancellation, coverage, lockfile, URL, date, and smoke fixes."}
+{"file":".trellis/spec/integrations/pi-web-search-contract.md","reason":"Executable final contract for schema, env, routing, cancellation, bounds, errors, cases, and required tests."}

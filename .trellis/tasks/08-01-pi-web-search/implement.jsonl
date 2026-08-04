@@ -1,0 +1,6 @@
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Requires graduating and hardening the existing prototype without leaving duplicated implementations."}
+{"file":".trellis/tasks/08-01-pi-web-search/research/prototype-vs-upstream.md","reason":"Identifies exact reusable algorithms, upstream divergence, hidden coupling, tests, and MIT obligations."}
+{"file":".trellis/tasks/08-01-pi-web-search/research/pi-extension-architecture.md","reason":"Defines Pi 0.83 package/tool contracts, cancellation gaps, output bounds, configuration, and verification expectations."}
+{"file":".trellis/tasks/08-01-pi-web-search/research/planning-review.md","reason":"Challenges the design with whole-tool budget, locale-token, body-limit, contract, and scope-minimization findings."}
+{"file":".trellis/tasks/08-01-pi-web-search/research/brave-api-usage.md","reason":"Records the current official Brave endpoint/auth and attribution scope; implementation must consume only ordinary web results."}
+{"file":".trellis/spec/integrations/pi-web-search-contract.md","reason":"Executable maintenance contract captured from the completed integration."}
