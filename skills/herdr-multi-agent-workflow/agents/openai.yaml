@@ -1,0 +1,14 @@
+interface:
+  display_name: Herdr Multi-Agent Workflow
+  short_description: 编排 Pi、Claude Code 与 Codex 的 Herdr 工作流
+  default_prompt: Use $herdr-multi-agent-workflow to set up and run a safe multi-agent
+    coding workflow in Herdr.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true
