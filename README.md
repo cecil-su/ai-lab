@@ -23,6 +23,12 @@ AI Lab - monorepo for all AI-related ideas, experiments, and tools.
 | [create-lab](tools/create-lab/) | lab 项目脚手架 | - |
 | [knowledge-feed](tools/knowledge-feed/) | 自动化知识抓取（RSS + Jina Reader） | [设计](docs/designs/2026-04-08-knowledge-feed.md) \| [计划](docs/plans/2026-04-08-knowledge-feed.md) |
 
+### skills/
+
+| 名称 | 说明 |
+|------|------|
+| [herdr-multi-agent-workflow](skills/herdr-multi-agent-workflow/) | 使用 Herdr 编排 Pi、Claude Code 与 Codex 的安全多 Agent 工作流 |
+
 ### lab/
 
 | 名称 | 说明 | 设计文档 |
